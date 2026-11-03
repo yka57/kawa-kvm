@@ -3,6 +3,8 @@
 This is the NanoKVM-USB browser version project.
 
 Online website: [usbkvm.sipeed.com](https://usbkvm.sipeed.com).
+This fork's hosted build: [yka57.github.io/kawa-kvm](https://yka57.github.io/kawa-kvm/)
+(see _Run it on the Mac_).
 
 ## About this fork (kawa-kvm)
 
@@ -26,8 +28,19 @@ The full documentation is in Japanese:
 
 ## Run it on the Mac
 
-WebSerial (and the camera) only work in a **secure context**, so run the dev server on the Mac
-the NanoKVM-USB is plugged into and open it through `localhost`:
+**Easiest: open the hosted build.** Every push to `main` is built by GitHub Actions
+(`.github/workflows/pages.yml`, `npm run build:pages` = `build` with `--base=/kawa-kvm/`) and
+published to
+
+**https://yka57.github.io/kawa-kvm/**
+
+Plug the NanoKVM-USB into the Mac, open that URL in Chrome and allow the camera and the serial
+port. Nothing is installed: the page runs inside Chrome and talks to the device over the Mac's
+USB; the server only hands out the static files (`https://` is a secure context, so WebSerial
+works there). Reload the page to pick up a new deployment.
+
+**Or run it locally.** WebSerial (and the camera) only work in a **secure context**, so run the
+dev server on the Mac the NanoKVM-USB is plugged into and open it through `localhost`:
 
 ```shell
 git clone https://github.com/yka57/kawa-kvm.git   # or rsync the folder to the Mac

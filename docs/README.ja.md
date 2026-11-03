@@ -2,6 +2,8 @@
 
 Mac（MacBook のトラックパッド、日本語環境、Chrome）から NanoKVM-USB 経由で Windows 機を操作するための個人フォークです。upstream（[sipeed/NanoKVM-USB](https://github.com/sipeed/NanoKVM-USB) の `browser/`）に次の 3 つを足しています。設定を何も触らなくても変わる点は「[upstream からの挙動変更](#upstream-からの挙動変更)」にまとめました。それ以外の HID レポートは upstream とバイト単位で同一です。
 
+公開ページ: **https://yka57.github.io/kawa-kvm/**（「[Mac で動かす](#mac-で動かす)」参照）
+
 | 機能                                                                                                                                     | 場所                                                          | 既定値                                                      |
 | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------- |
 | **⌘ キー変換** — ⌘ を Ctrl として送信（⌘C/⌘V/⌘F が Ctrl+C/V/F になる）＋ Mac 風ナビゲーション                                            | キーボード → ⌘ キー変換（Mac）                                | **オン**（Mac ホストかつ操作先 OS が macOS 以外のとき有効） |
@@ -17,7 +19,13 @@ Mac（MacBook のトラックパッド、日本語環境、Chrome）から NanoK
 
 ## Mac で動かす
 
-WebSerial とカメラは **セキュアコンテキスト**（`https://` または `localhost`）でしか使えません。NanoKVM-USB を挿した Mac 上で開発サーバーを起動し、`localhost` で開くのが一番簡単です。
+**一番簡単なのは公開ページを開くことです。** `main` に push するたびに GitHub Actions（`.github/workflows/pages.yml`。`npm run build:pages` = `build` に `--base=/kawa-kvm/` を付けたもの）がビルドして次の URL に公開します。
+
+**https://yka57.github.io/kawa-kvm/**
+
+NanoKVM-USB を Mac に挿し、Chrome でこの URL を開いてカメラとシリアルポートを許可するだけです。Mac には何もインストールしません。ページは Chrome の中で動き、Mac の USB 経由で直接デバイスと通信します。サーバーは静的ファイルを渡すだけです（`https://` はセキュアコンテキストなので WebSerial が使えます）。新しい版を反映するにはページをリロードします。
+
+**ローカルで動かす場合:** WebSerial とカメラは **セキュアコンテキスト**（`https://` または `localhost`）でしか使えません。NanoKVM-USB を挿した Mac 上で開発サーバーを起動し、`localhost` で開きます。
 
 ```shell
 git clone https://github.com/yka57/kawa-kvm.git   # または rsync でフォルダーを Mac にコピー
