@@ -25,9 +25,40 @@ interface MouseButtonEvent {
 
 interface MouseWheelEvent {
   type: 'wheel';
+  /** Signed wheel notches for one report (direction already applied). */
   deltaY: number;
 }
 
-export type MouseAbsoluteEvent = MouseMoveAbsoluteEvent | MouseButtonEvent | MouseWheelEvent;
+/**
+ * The held-button bitmask changed (DOM `buttons` layout = HID buttons byte).
+ * Pointer events deliver chords this way: a second button pressed while one
+ * is held arrives as a `pointermove` with a new mask.
+ */
+interface MouseButtonsEvent {
+  type: 'buttons';
+  buttons: number;
+}
 
-export type MouseRelativeEvent = MouseMoveRelativeEvent | MouseButtonEvent | MouseWheelEvent;
+/**
+ * Release every held button in one report (pointer capture lost, window blur,
+ * tab hidden, pointer lock lost, unmount). `force` sends the all-up report
+ * even when nothing is tracked as held (the "Release all keys" row).
+ */
+interface MouseReleaseEvent {
+  type: 'release';
+  force?: boolean;
+}
+
+export type MouseAbsoluteEvent =
+  | MouseMoveAbsoluteEvent
+  | MouseButtonEvent
+  | MouseButtonsEvent
+  | MouseWheelEvent
+  | MouseReleaseEvent;
+
+export type MouseRelativeEvent =
+  | MouseMoveRelativeEvent
+  | MouseButtonEvent
+  | MouseButtonsEvent
+  | MouseWheelEvent
+  | MouseReleaseEvent;

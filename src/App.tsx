@@ -5,9 +5,13 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useTranslation } from 'react-i18next';
 import { useMediaQuery } from 'react-responsive';
 
+import { HidLogOverlay } from '@/components/debug/hid-log';
 import { DeviceModal } from '@/components/device-modal';
 import { Keyboard } from '@/components/keyboard';
 import { Menu } from '@/components/menu';
+import { pasteController } from '@/components/menu/keyboard/paste/controller';
+import { PasteProgressPill } from '@/components/menu/keyboard/paste/progress-pill';
+import { PasteSettingsModal } from '@/components/menu/keyboard/paste/settings-modal';
 import { Mouse } from '@/components/mouse';
 import { VirtualKeyboard } from '@/components/virtual-keyboard';
 import {
@@ -17,9 +21,12 @@ import {
   videoScaleAtom,
   videoStateAtom
 } from '@/jotai/device.ts';
-import { isKeyboardEnableAtom } from '@/jotai/keyboard.ts';
+import { isKeyboardEnableAtom, keyboardRemapAtom } from '@/jotai/keyboard.ts';
 import { mouseStyleAtom } from '@/jotai/mouse.ts';
+import { targetOsAtom } from '@/jotai/target.ts';
+import { getOperatingSystem } from '@/libs/browser';
 import { device } from '@/libs/device';
+import { isRemapActive } from '@/libs/keyboard/remap-config';
 import { camera } from '@/libs/media/camera';
 import { checkPermission, requestCameraPermission } from '@/libs/media/permission.ts';
 import * as storage from '@/libs/storage';
@@ -36,6 +43,8 @@ const App = () => {
   const isKeyboardEnable = useAtomValue(isKeyboardEnableAtom);
   const setResolution = useSetAtom(resolutionAtom);
   const [videoRotation, setVideoRotation] = useAtom(videoRotationAtom);
+  const remapConfig = useAtomValue(keyboardRemapAtom);
+  const targetOs = useAtomValue(targetOsAtom);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isCameraGranted, setIsCameraGranted] = useState(false);
@@ -54,6 +63,33 @@ const App = () => {
   useEffect(() => {
     setShouldSwapDimensions(videoRotation === 90 || videoRotation === 270);
   }, [videoRotation]);
+
+  // A serial disconnect stops a paste run at once (spec §5.2); registered here
+  // so libs/device never imports the paste code.
+  useEffect(() => {
+    return device.serialPort.addDisconnectListener(() => {
+      pasteController.cancel('serial-error');
+    });
+  }, []);
+
+  // While ⌘ → Ctrl is active, Chrome-reserved ⌘W/⌘Q would close the session
+  // silently; ask for confirmation as long as serial is connected (spec §3.1).
+  const isRemapActiveNow = isRemapActive(remapConfig, getOperatingSystem(), targetOs);
+
+  useEffect(() => {
+    if (!isRemapActiveNow || serialState !== 'connected') return;
+
+    function handleBeforeUnload(event: BeforeUnloadEvent): void {
+      event.preventDefault();
+      event.returnValue = true;
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isRemapActiveNow, serialState]);
 
   const videoStyle = useMemo(() => {
     const baseStyle = {
@@ -160,6 +196,9 @@ const App = () => {
       />
 
       <VirtualKeyboard isBigScreen={isBigScreen} />
+      <PasteProgressPill />
+      <PasteSettingsModal />
+      <HidLogOverlay />
     </>
   );
 };

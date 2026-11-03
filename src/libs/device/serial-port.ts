@@ -22,6 +22,7 @@ export class SerialPort {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private onDisconnect?: () => void;
+  private disconnectListeners = new Set<() => void>();
 
   private disconnectHandler = (event: Event) => {
     if (event.target === this.instance) {
@@ -59,8 +60,29 @@ export class SerialPort {
     navigator.serial.addEventListener('disconnect', this.disconnectHandler);
   }
 
+  /**
+   * Registers a callback that runs synchronously at the start of a disconnect,
+   * before the app-level onDisconnect (the paste engine cancels its run with
+   * 'serial-error'; registered from App.tsx so this module stays free of UI
+   * imports). Returns the unsubscribe function.
+   */
+  addDisconnectListener(listener: () => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => {
+      this.disconnectListeners.delete(listener);
+    };
+  }
+
   private handleDisconnect(): void {
     if (!this.instance) return;
+
+    for (const listener of Array.from(this.disconnectListeners)) {
+      try {
+        listener();
+      } catch (err) {
+        console.error('Disconnect listener failed:', err);
+      }
+    }
 
     this.releaseReader();
     this.releaseWriter();

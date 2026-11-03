@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import * as storage from '@/libs/storage';
 
+import { DEFAULT_SHORTCUTS } from './defaults.ts';
 import { Recorder } from './recorder.tsx';
 import { Shortcut } from './shortcut.tsx';
 import type { Shortcut as ShortcutInterface } from './types.ts';
@@ -16,22 +17,6 @@ export const Shortcuts = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [customShortcuts, setCustomShortcuts] = useState<ShortcutInterface[]>([]);
-
-  const defaultShortcuts: ShortcutInterface[] = [
-    {
-      keys: [
-        { code: 'MetaLeft', label: 'Win' },
-        { code: 'Tab', label: 'Tab' }
-      ]
-    },
-    {
-      keys: [
-        { code: 'ControlLeft', label: 'Ctrl' },
-        { code: 'AltLeft', label: 'Alt' },
-        { code: 'Delete', label: '⌫' }
-      ]
-    }
-  ];
 
   useEffect(() => {
     const shortcuts = storage.getShortcuts();
@@ -76,7 +61,7 @@ export const Shortcuts = () => {
       )}
 
       {/*  default shortcuts */}
-      {defaultShortcuts.map((shortcut, index) => (
+      {DEFAULT_SHORTCUTS.map((shortcut, index) => (
         <Shortcut key={index} shortcut={shortcut}></Shortcut>
       ))}
 

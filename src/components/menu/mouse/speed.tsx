@@ -1,57 +1,85 @@
-import { ReactElement, useEffect, useState } from 'react';
+import { ReactElement } from 'react';
 import { Popover, Slider } from 'antd';
 import { useAtom } from 'jotai';
 import { GaugeIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { scrollIntervalAtom } from '@/jotai/mouse.ts';
+import { scrollIntervalAtom, scrollPxPerNotchAtom } from '@/jotai/mouse.ts';
+import {
+  intervalToWheelSpeed,
+  pxPerNotchToSlider,
+  SCROLL_SENSITIVITY,
+  sliderToPxPerNotch,
+  wheelSpeedToInterval
+} from '@/libs/pointer/scales';
 import * as storage from '@/libs/storage';
 
-const MAX_INTERVAL = 300;
-
+/**
+ * Wheel settings (spec §4.3): the legacy "Wheel speed" rate cap (controlled
+ * now, same mapping) next to the new "Scroll sensitivity" (host px per notch).
+ */
 export const Speed = (): ReactElement => {
   const { t } = useTranslation();
 
   const [scrollInterval, setScrollInterval] = useAtom(scrollIntervalAtom);
+  const [scrollPxPerNotch, setScrollPxPerNotch] = useAtom(scrollPxPerNotchAtom);
 
-  const [currentSpeed, setCurrentSpeed] = useState(100);
-
-  useEffect(() => {
-    const speed = interval2Speed(scrollInterval);
-    setCurrentSpeed(speed);
-  }, [scrollInterval]);
-
-  function update(speed: number): void {
-    const interval = speed2Interval(speed);
+  function updateSpeed(speed: number): void {
+    const interval = wheelSpeedToInterval(speed);
     setScrollInterval(interval);
     storage.setMouseScrollInterval(interval);
   }
 
-  function interval2Speed(interval: number) {
-    if (interval === MAX_INTERVAL) {
-      return 0;
-    }
-    return ((MAX_INTERVAL - interval) * 100) / MAX_INTERVAL;
+  function updateSensitivity(value: number): void {
+    const pxPerNotch = sliderToPxPerNotch(value);
+    setScrollPxPerNotch(pxPerNotch);
+    storage.setScrollPxPerNotch(pxPerNotch);
   }
 
-  function speed2Interval(speed: number) {
-    return MAX_INTERVAL - speed * (MAX_INTERVAL / 100);
-  }
+  const marks = {
+    0: <span>{t('mouse.slow')}</span>,
+    100: <span>{t('mouse.fast')}</span>
+  };
 
   const content = (
-    <div className="h-[150px] w-[60px] py-3">
-      <Slider
-        vertical
-        marks={{
-          0: <span>{t('mouse.slow')}</span>,
-          100: <span>{t('mouse.fast')}</span>
-        }}
-        range={false}
-        included={false}
-        step={10}
-        defaultValue={currentSpeed}
-        onChange={update}
-      />
+    <div className="flex space-x-5 px-2 py-3">
+      <div className="flex flex-col items-center space-y-2">
+        <span className="select-none whitespace-nowrap text-xs text-neutral-400">
+          {t('mouse.speed')}
+        </span>
+        <div className="h-[150px] w-[60px]">
+          <Slider
+            vertical
+            marks={marks}
+            range={false}
+            included={false}
+            step={10}
+            value={intervalToWheelSpeed(scrollInterval)}
+            onChange={updateSpeed}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-col items-center space-y-2">
+        <span className="select-none whitespace-nowrap text-xs text-neutral-400">
+          {t('mouse.scrollSensitivity')}
+        </span>
+        <div className="h-[150px] w-[60px]">
+          <Slider
+            vertical
+            marks={marks}
+            range={false}
+            included={false}
+            step={5}
+            value={pxPerNotchToSlider(scrollPxPerNotch)}
+            onChange={updateSensitivity}
+            tooltip={{
+              formatter: (value) =>
+                `${sliderToPxPerNotch(value ?? SCROLL_SENSITIVITY.DEFAULT_SLIDER)} px`
+            }}
+          />
+        </div>
+      </div>
     </div>
   );
 

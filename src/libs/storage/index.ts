@@ -155,3 +155,181 @@ export function getMouseJigglerMode(): 'enable' | 'disable' {
 export function setMouseJigglerMode(jiggler: 'enable' | 'disable'): void {
   localStorage.setItem(MOUSE_JIGGLER_MODE_KEY, jiggler);
 }
+
+// ---------------------------------------------------------------------------
+// Fork additions (spec §2.1 / §2.2). Every getter below validates the stored
+// value, falls back to a documented default and never throws (storage may be
+// missing, disabled or hold garbage). Existing keys above keep upstream semantics.
+// ---------------------------------------------------------------------------
+
+export type TargetOs = 'windows' | 'linux' | 'macos';
+export type TargetLayout = 'us' | 'jis';
+
+const TARGET_OS_KEY = 'nanokvm-usb-target-os';
+const TARGET_LAYOUT_KEY = 'nanokvm-usb-target-layout';
+const KEYBOARD_REMAP_KEY = 'nanokvm-usb-keyboard-remap';
+const MOUSE_SCROLL_PX_PER_NOTCH_KEY = 'nanokvm-usb-mouse-scroll-px-per-notch';
+const MOUSE_SENSITIVITY_KEY = 'nanokvm-usb-mouse-sensitivity';
+const PASTE_SETTINGS_KEY = 'nanokvm-usb-paste-settings';
+const DEBUG_HID_KEY = 'nanokvm-usb-debug-hid';
+
+interface NumberRange {
+  min: number;
+  max: number;
+  default: number;
+}
+
+/** Host pixels of wheel travel per emitted notch. */
+export const SCROLL_PX_PER_NOTCH_RANGE: NumberRange = { min: 20, max: 400, default: 100 };
+/** Relative-mode pointer gain. */
+export const MOUSE_SENSITIVITY_RANGE: NumberRange = { min: 0.25, max: 4, default: 1 };
+
+function readItem(key: string): string | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeItem(key: string, value: string): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage disabled or quota exceeded: the setting simply does not persist.
+  }
+}
+
+function removeItem(key: string): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
+}
+
+function readNumber(key: string, range: NumberRange): number {
+  const raw = readItem(key);
+  if (raw === null || raw.trim() === '') return range.default;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < range.min || value > range.max) return range.default;
+  return value;
+}
+
+function writeNumber(key: string, value: number, range: NumberRange): void {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return;
+  writeItem(key, String(Math.min(range.max, Math.max(range.min, value))));
+}
+
+function serializeJson(value: string | object): string | null {
+  if (typeof value === 'string') return value;
+  try {
+    const json = JSON.stringify(value);
+    return typeof json === 'string' ? json : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse a stored JSON document. Returns the object, or null when the value is
+ * absent, malformed or not a plain object (arrays and primitives are rejected).
+ */
+export function parseJsonObject(raw: string | null | undefined): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** The UI language the way i18n resolves it: stored choice, then navigator.language, else 'en'. */
+function detectLanguage(): string {
+  const stored = readItem(LANGUAGE_KEY);
+  if (stored) return stored;
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.language === 'string') {
+      return navigator.language;
+    }
+  } catch {
+    // ignore
+  }
+  return 'en';
+}
+
+export function getTargetOs(): TargetOs {
+  const os = readItem(TARGET_OS_KEY);
+  return os === 'windows' || os === 'linux' || os === 'macos' ? os : 'windows';
+}
+
+export function setTargetOs(os: TargetOs): void {
+  writeItem(TARGET_OS_KEY, os);
+}
+
+/** Stored layout, else 'jis' when the UI language is Japanese and 'us' otherwise. */
+export function getTargetLayout(language: string = detectLanguage()): TargetLayout {
+  const layout = readItem(TARGET_LAYOUT_KEY);
+  if (layout === 'us' || layout === 'jis') return layout;
+  return language.toLowerCase().startsWith('ja') ? 'jis' : 'us';
+}
+
+export function setTargetLayout(layout: TargetLayout): void {
+  writeItem(TARGET_LAYOUT_KEY, layout);
+}
+
+/** Raw JSON string of the ⌘ remap config (normalisation lives in libs/keyboard/remap-config). */
+export function getKeyboardRemapRaw(): string | null {
+  return readItem(KEYBOARD_REMAP_KEY);
+}
+
+/** Accepts the config object or an already serialised JSON string. */
+export function setKeyboardRemap(config: string | object): void {
+  const json = serializeJson(config);
+  if (json !== null) writeItem(KEYBOARD_REMAP_KEY, json);
+}
+
+export function getScrollPxPerNotch(): number {
+  return readNumber(MOUSE_SCROLL_PX_PER_NOTCH_KEY, SCROLL_PX_PER_NOTCH_RANGE);
+}
+
+export function setScrollPxPerNotch(px: number): void {
+  writeNumber(MOUSE_SCROLL_PX_PER_NOTCH_KEY, px, SCROLL_PX_PER_NOTCH_RANGE);
+}
+
+export function getMouseSensitivity(): number {
+  return readNumber(MOUSE_SENSITIVITY_KEY, MOUSE_SENSITIVITY_RANGE);
+}
+
+export function setMouseSensitivity(gain: number): void {
+  writeNumber(MOUSE_SENSITIVITY_KEY, gain, MOUSE_SENSITIVITY_RANGE);
+}
+
+/** Raw JSON string of the paste settings (normalisation lives in libs/paste/settings). */
+export function getPasteSettingsRaw(): string | null {
+  return readItem(PASTE_SETTINGS_KEY);
+}
+
+/** Accepts the settings object or an already serialised JSON string. */
+export function setPasteSettings(settings: string | object): void {
+  const json = serializeJson(settings);
+  if (json !== null) writeItem(PASTE_SETTINGS_KEY, json);
+}
+
+/** `'1'` enables the HID log overlay (the `?debug=hid` query is handled by the overlay itself). */
+export function getDebugHid(): boolean {
+  return readItem(DEBUG_HID_KEY) === '1';
+}
+
+export function setDebugHid(enabled: boolean): void {
+  if (enabled) {
+    writeItem(DEBUG_HID_KEY, '1');
+  } else {
+    removeItem(DEBUG_HID_KEY);
+  }
+}

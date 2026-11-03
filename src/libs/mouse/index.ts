@@ -1,5 +1,5 @@
-// Maximum absolute coordinate value
-const MAX_ABS_COORD = 4096;
+import { toAbs4095 } from '@/libs/pointer/absolute-map';
+import { splitInt8 } from '@/libs/pointer/relative-motion';
 
 // Button bit positions
 const MouseButtons = {
@@ -26,6 +26,29 @@ function getMouseButtonBit(button: number): number {
     default:
       return 0;
   }
+}
+
+/**
+ * Build relative reports for arbitrary deltas: each axis is split into int8
+ * chunks (`splitInt8`), the chunks are zipped into one report per index and
+ * the buttons byte is repeated. 300/-130 → three reports; all-zero → [].
+ */
+export function buildRelativeReports(
+  buttons: number,
+  deltaX: number,
+  deltaY: number,
+  wheel: number = 0
+): number[][] {
+  const xs = splitInt8(deltaX);
+  const ys = splitInt8(deltaY);
+  const ws = splitInt8(wheel);
+  const count = Math.max(xs.length, ys.length, ws.length);
+
+  const reports: number[][] = [];
+  for (let i = 0; i < count; i++) {
+    reports.push([buttons, (xs[i] ?? 0) & 0xff, (ys[i] ?? 0) & 0xff, (ws[i] ?? 0) & 0xff]);
+  }
+  return reports;
 }
 
 /**
@@ -61,6 +84,18 @@ export class MouseReportRelative {
   }
 
   /**
+   * Build one report per int8 chunk for deltas beyond ±127 (flicks), buttons
+   * repeated in every report. Returns [] when nothing moves; use
+   * buildButtonReport() for a pure button change.
+   * @param deltaX X movement (any integer)
+   * @param deltaY Y movement (any integer)
+   * @param wheel Scroll wheel notches (any integer, negative = down)
+   */
+  buildReports(deltaX: number, deltaY: number, wheel: number = 0): number[][] {
+    return buildRelativeReports(this.buttons, deltaX, deltaY, wheel);
+  }
+
+  /**
    * Build button-only report (no movement)
    */
   buildButtonReport(): number[] {
@@ -81,8 +116,8 @@ export class MouseReportRelative {
  * Absolute Mouse Report (6 bytes)
  *
  * Byte 0: Buttons
- * Byte 1-2: X position (0 to 32767, Little Endian)
- * Byte 3-4: Y position (0 to 32767, Little Endian)
+ * Byte 1-2: X position (0 to 4095, Little Endian)
+ * Byte 3-4: Y position (0 to 4095, Little Endian)
  * Byte 5: Wheel
  */
 export class MouseAbsoluteRelative {
@@ -103,9 +138,9 @@ export class MouseAbsoluteRelative {
    * @param wheel Scroll wheel (-127 to 127)
    */
   buildReport(x: number, y: number, wheel: number = 0): number[] {
-    // Convert normalized coordinates (0-1) to absolute coordinates (0-4096)
-    const xAbs = Math.floor(Math.max(0, Math.min(1, x)) * MAX_ABS_COORD);
-    const yAbs = Math.floor(Math.max(0, Math.min(1, y)) * MAX_ABS_COORD);
+    // Convert normalized coordinates (0-1) to absolute coordinates (0-4095)
+    const xAbs = toAbs4095(x);
+    const yAbs = toAbs4095(y);
 
     const x1 = xAbs & 0xff;
     const x2 = (xAbs >> 8) & 0xff;

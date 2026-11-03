@@ -47,8 +47,10 @@ class MouseJiggler {
     const report1 = this.mouseReport.buildReport(10, 10, 0);
     const report2 = this.mouseReport.buildReport(-10, -10, 0);
 
-    await device.sendKeyboardData([0x01, ...report1]);
-    await device.sendKeyboardData([0x01, ...report2]);
+    // Relative mouse command (0x01 prefix → cmd 0x05); upstream sent these as
+    // keyboard frames by mistake, so the jiggler never moved anything.
+    await device.sendMouseData([0x01, ...report1]);
+    await device.sendMouseData([0x01, ...report2]);
   }
 }
 

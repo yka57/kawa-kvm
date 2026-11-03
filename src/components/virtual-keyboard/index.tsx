@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useAtom } from 'jotai';
 import { XIcon } from 'lucide-react';
@@ -8,8 +8,10 @@ import { Drawer } from 'vaul';
 import 'react-simple-keyboard/build/css/index.css';
 import '@/assets/keyboard.css';
 
+import { useHidLocked } from '@/components/menu/keyboard/paste/use-hid-locked';
 import { isKeyboardOpenAtom } from '@/jotai/keyboard.ts';
 import { device } from '@/libs/device';
+import { hidLock } from '@/libs/keyboard/hid-lock';
 import { KeyboardReport } from '@/libs/keyboard/keyboard.ts';
 
 import {
@@ -32,8 +34,23 @@ export const VirtualKeyboard = ({ isBigScreen }: KeyboardProps) => {
 
   const keyboardRef = useRef(new KeyboardReport());
 
+  const isHidLocked = useHidLocked();
+
+  // HID lock (spec §5.3): while the paste engine owns the wire, key events are
+  // ignored and the pending modifiers are dropped (the engine starts from an
+  // all-zero report, so there is nothing to release).
+  useEffect(() => {
+    return hidLock.onChange((owner) => {
+      if (owner === null) return;
+      keyboardRef.current.reset();
+      setActiveModifierKeys([]);
+    });
+  }, []);
+
   // Key down event
   async function onKeyPress(key: string): Promise<void> {
+    if (hidLock.isLocked()) return;
+
     if (modifierKeys[key]) {
       if (!activeModifierKeys.includes(key)) {
         // Save modifier key
@@ -60,6 +77,8 @@ export const VirtualKeyboard = ({ isBigScreen }: KeyboardProps) => {
 
   // Key up event
   async function onKeyReleased(key: string): Promise<void> {
+    if (hidLock.isLocked()) return;
+
     // Skip modifier key
     if (modifierKeys[key]) {
       return;
@@ -114,7 +133,13 @@ export const VirtualKeyboard = ({ isBigScreen }: KeyboardProps) => {
 
           <div className="h-px flex-shrink-0 border-b bg-neutral-300" />
 
-          <div data-vaul-no-drag className="keyboardContainer w-full">
+          <div
+            data-vaul-no-drag
+            className={clsx(
+              'keyboardContainer w-full',
+              isHidLocked && 'pointer-events-none opacity-50'
+            )}
+          >
             {/* main keyboard */}
             <Keyboard
               buttonTheme={getButtonTheme()}

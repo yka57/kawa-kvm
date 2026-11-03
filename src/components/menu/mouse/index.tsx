@@ -6,9 +6,11 @@ import { MouseIcon } from 'lucide-react';
 import {
   mouseJigglerModeAtom,
   mouseModeAtom,
+  mouseSensitivityAtom,
   mouseStyleAtom,
   scrollDirectionAtom,
-  scrollIntervalAtom
+  scrollIntervalAtom,
+  scrollPxPerNotchAtom
 } from '@/jotai/mouse.ts';
 import { mouseJiggler } from '@/libs/mouse-jiggler';
 import * as storage from '@/libs/storage';
@@ -16,6 +18,7 @@ import * as storage from '@/libs/storage';
 import { Direction } from './direction.tsx';
 import { Jiggler } from './jiggler.tsx';
 import { Mode } from './mode.tsx';
+import { Sensitivity } from './sensitivity.tsx';
 import { Speed } from './speed.tsx';
 import { Style } from './style.tsx';
 
@@ -24,6 +27,8 @@ export const Mouse = () => {
   const [mouseMode, setMouseMode] = useAtom(mouseModeAtom);
   const setScrollDirection = useSetAtom(scrollDirectionAtom);
   const setScrollInterval = useSetAtom(scrollIntervalAtom);
+  const setScrollPxPerNotch = useSetAtom(scrollPxPerNotchAtom);
+  const setMouseSensitivity = useSetAtom(mouseSensitivityAtom);
   const setMouseJigglerMode = useSetAtom(mouseJigglerModeAtom);
 
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
@@ -53,6 +58,10 @@ export const Mouse = () => {
       setScrollInterval(interval);
     }
 
+    // validated getters with defaults (spec §2.2)
+    setScrollPxPerNotch(storage.getScrollPxPerNotch());
+    setMouseSensitivity(storage.getMouseSensitivity());
+
     const jiggler = storage.getMouseJigglerMode();
     mouseJiggler.setMode(jiggler);
     setMouseJigglerMode(jiggler);
@@ -62,6 +71,7 @@ export const Mouse = () => {
     <div className="flex flex-col space-y-0.5">
       <Style />
       <Mode />
+      {mouseMode === 'relative' && <Sensitivity />}
       <Direction />
       <Speed />
 

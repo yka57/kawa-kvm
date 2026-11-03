@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { MaximizeIcon, MinimizeIcon } from 'lucide-react';
 
+import { toggleFullscreenWithKeyboardLock } from '@/libs/browser/fullscreen';
+
 export const Fullscreen = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -19,18 +21,7 @@ export const Fullscreen = () => {
   }, []);
 
   function handleFullscreen() {
-    if (!document.fullscreenElement) {
-      const element = document.documentElement;
-      element.requestFullscreen().then();
-
-      // @ts-expect-error - https://developer.mozilla.org/en-US/docs/Web/API/Keyboard/lock
-      navigator.keyboard?.lock();
-    } else {
-      document.exitFullscreen().then();
-
-      // @ts-expect-error - https://developer.mozilla.org/en-US/docs/Web/API/Keyboard/unlock
-      navigator.keyboard?.unlock();
-    }
+    toggleFullscreenWithKeyboardLock();
   }
 
   return (

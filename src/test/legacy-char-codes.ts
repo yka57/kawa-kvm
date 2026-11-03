@@ -1,3 +1,9 @@
+/**
+ * Verbatim copy of upstream `src/libs/keyboard/charCodes.ts` (the US table of the
+ * original paste loop). Kept only as the reference of the US-layout parity tests
+ * (spec §5.1); the runtime module was deleted once those tests passed.
+ */
+
 export const CharCodes: Record<number, number> = {
   48: 0x27, // 0
   49: 0x1e, // 1
