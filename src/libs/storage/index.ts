@@ -171,6 +171,7 @@ const KEYBOARD_REMAP_KEY = 'nanokvm-usb-keyboard-remap';
 const MOUSE_SCROLL_PX_PER_NOTCH_KEY = 'nanokvm-usb-mouse-scroll-px-per-notch';
 const MOUSE_SENSITIVITY_KEY = 'nanokvm-usb-mouse-sensitivity';
 const PASTE_SETTINGS_KEY = 'nanokvm-usb-paste-settings';
+const PASTE_BRIDGE_INTRO_KEY = 'nanokvm-usb-paste-bridge-intro';
 const DEBUG_HID_KEY = 'nanokvm-usb-debug-hid';
 
 interface NumberRange {
@@ -319,6 +320,22 @@ export function getPasteSettingsRaw(): string | null {
 export function setPasteSettings(settings: string | object): void {
   const json = serializeJson(settings);
   if (json !== null) writeItem(PASTE_SETTINGS_KEY, json);
+}
+
+/**
+ * `'1'` once the user accepted the one-time explanation of the browser bridge
+ * (spec v2 §9.1); per browser profile, like every key here.
+ */
+export function getPasteBridgeIntroAccepted(): boolean {
+  return readItem(PASTE_BRIDGE_INTRO_KEY) === '1';
+}
+
+export function setPasteBridgeIntroAccepted(accepted: boolean): void {
+  if (accepted) {
+    writeItem(PASTE_BRIDGE_INTRO_KEY, '1');
+  } else {
+    removeItem(PASTE_BRIDGE_INTRO_KEY);
+  }
 }
 
 /** `'1'` enables the HID log overlay (the `?debug=hid` query is handled by the overlay itself). */

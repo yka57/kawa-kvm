@@ -9,7 +9,12 @@ import {
   PASTE_SOFT_LIMIT,
   textToKeySequence
 } from '@/libs/paste/text-to-keys';
-import { PACING, type StopReason } from '@/libs/paste/typing-engine';
+import {
+  estimateProgramMs,
+  PACING,
+  type PastePhase,
+  type StopReason
+} from '@/libs/paste/typing-engine';
 
 import {
   chordFromKeyEvent,
@@ -17,10 +22,10 @@ import {
   countSkipped,
   decideStart,
   displayChar,
-  estimateRunMs,
   formatChord,
   formatSkippedChars,
   MAX_SKIPPED_SHOWN,
+  phaseKey,
   PILL_ETA_THRESHOLD_MS,
   reasonKey,
   showPill,
@@ -63,13 +68,17 @@ describe('decideStart', () => {
   });
 });
 
-describe('estimateRunMs', () => {
+// the large-paste confirm takes its ETA from the program (spec v2 §9.1): same numbers as v1
+describe('ETA of a direct paste', () => {
+  const eta = (text: string, pacing = PACING.normal) =>
+    estimateProgramMs([{ kind: 'keys', strokes: compile(text).strokes }], pacing);
+
   it('sums hold + gap per stroke and the extra pause after Enter', () => {
     const result = compile('ab\nc');
     expect(result.strokes).toHaveLength(4);
-    expect(estimateRunMs(result, PACING.normal)).toBe(4 * 40 + 100);
-    expect(estimateRunMs(result, PACING.safe)).toBe(4 * 100 + 150);
-    expect(estimateRunMs(compile(''), PACING.normal)).toBe(0);
+    expect(eta('ab\nc')).toBe(4 * 40 + 100);
+    expect(eta('ab\nc', PACING.safe)).toBe(4 * 100 + 150);
+    expect(eta('')).toBe(0);
   });
 });
 
@@ -175,7 +184,13 @@ describe('reasonKey', () => {
       'mouse-interrupt',
       'tab-hidden',
       'serial-error',
-      'lock-busy'
+      'lock-busy',
+      'bridge-no-window',
+      'bridge-probe-failed',
+      'bridge-load-failed',
+      'bridge-verify-failed',
+      'bridge-close-failed',
+      'caps-lock'
     ];
     const enPaste = en.translation.paste as Record<string, string>;
     const jaPaste = ja.translation.paste as Record<string, string>;
@@ -188,6 +203,23 @@ describe('reasonKey', () => {
     }
     expect(reasonKey('key-interrupt')).toBe('paste.doneKey');
     expect(reasonKey('completed')).toBe('paste.doneCompleted');
+    expect(reasonKey('caps-lock')).toBe('paste.doneCapsLock');
+  });
+});
+
+describe('phaseKey', () => {
+  it('maps every bridge phase to a distinct key present in both en and ja', () => {
+    const phases: PastePhase[] = ['window', 'probe', 'type', 'verify', 'copy', 'close', 'paste'];
+    const enPaste = en.translation.paste as Record<string, string>;
+    const jaPaste = ja.translation.paste as Record<string, string>;
+    const keys = phases.map(phaseKey);
+    expect(new Set(keys).size).toBe(phases.length);
+    for (const key of keys) {
+      const leaf = key.slice('paste.'.length);
+      expect(typeof enPaste[leaf], key).toBe('string');
+      expect(typeof jaPaste[leaf], key).toBe('string');
+    }
+    expect(phaseKey('verify')).toBe('paste.phaseVerify');
   });
 });
 

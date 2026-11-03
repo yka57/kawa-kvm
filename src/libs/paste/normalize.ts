@@ -25,18 +25,21 @@ const PUNCT_MAP: Record<string, string> = {
 const PUNCT_RE = /[\u2018\u2019\u201a\u201c\u201d\u201e\u2013\u2014\u2015\u00a0\u2026]/g;
 
 /**
- * Always: strip a leading BOM, fold CRLF / lone CR to LF, apply NFC.
+ * Strips a leading BOM and folds CRLF / lone CR to LF. Every compiler path
+ * needs this before segmenting: Intl.Segmenter treats "\r\n" as ONE
+ * grapheme, so a compiler must never see a raw CR.
+ */
+export function foldLineBreaks(text: string): string {
+  const t = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  return t.replace(/\r\n?/g, '\n');
+}
+
+/**
+ * Always: foldLineBreaks, then NFC.
  * With `punct`: fold smart quotes, dashes, NBSP and ellipsis to ASCII.
- * CRLF folding happens here on purpose: Intl.Segmenter treats "\r\n" as ONE
- * grapheme, so the compiler must never see a raw CR.
  */
 export function normalizeText(text: string, options: NormalizeOptions): string {
-  let t = text;
-  if (t.charCodeAt(0) === 0xfeff) {
-    t = t.slice(1);
-  }
-  t = t.replace(/\r\n?/g, '\n');
-  t = t.normalize('NFC');
+  let t = foldLineBreaks(text).normalize('NFC');
   if (options.punct) {
     t = t.replace(PUNCT_RE, (ch) => PUNCT_MAP[ch] ?? ch);
   }

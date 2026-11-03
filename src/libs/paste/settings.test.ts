@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { System } from '@/libs/browser';
+import type { TargetOs } from '@/libs/storage';
 
 import {
   DEFAULT_PASTE_HOTKEY,
@@ -8,7 +9,11 @@ import {
   normaliseHotkey,
   normalisePasteSettings,
   PASTE_SETTINGS_VERSION,
-  type PasteSettings
+  resolveImePreKey,
+  resolveUnicodeMethod,
+  type ImePreKeySetting,
+  type PasteSettings,
+  type UnicodeMethodSetting
 } from './settings';
 
 const KEYS = [
@@ -18,6 +23,9 @@ const KEYS = [
   'normalizePunct',
   'stripTrailingNewline',
   'imePreKey',
+  'unicodeMethod',
+  'bridgeWindow',
+  'fixCapsLock',
   'hotkeyEnabled',
   'hotkey'
 ].sort();
@@ -27,17 +35,20 @@ describe('defaultPasteSettings', () => {
     const hosts: System[] = ['Windows', 'macOS', 'Linux', 'Unknown'];
     for (const host of hosts) {
       expect(defaultPasteSettings(host)).toEqual({
-        version: 1,
+        version: 2,
         speed: 'normal',
         newline: 'enter',
         normalizePunct: true,
         stripTrailingNewline: true,
-        imePreKey: 'none',
+        imePreKey: 'auto',
+        unicodeMethod: 'auto',
+        bridgeWindow: 'chromium-private',
+        fixCapsLock: true,
         hotkeyEnabled: host === 'macOS',
         hotkey: { code: 'KeyV', meta: true, shift: true }
       });
     }
-    expect(PASTE_SETTINGS_VERSION).toBe(1);
+    expect(PASTE_SETTINGS_VERSION).toBe(2);
     expect(DEFAULT_PASTE_HOTKEY).toEqual({ code: 'KeyV', meta: true, shift: true });
   });
 
@@ -75,12 +86,15 @@ describe('normalisePasteSettings', () => {
       'Linux'
     );
     expect(result).toEqual({
-      version: 1,
+      version: 2,
       speed: 'safe',
       newline: 'shift-enter',
       normalizePunct: false,
       stripTrailingNewline: false,
       imePreKey: 'NonConvert',
+      unicodeMethod: 'auto',
+      bridgeWindow: 'chromium-private',
+      fixCapsLock: true,
       hotkeyEnabled: true,
       hotkey: { code: 'KeyP', ctrl: true, alt: true }
     });
@@ -103,9 +117,9 @@ describe('normalisePasteSettings', () => {
   it('resets invalid enums and non-boolean flags to their defaults', () => {
     const result = normalisePasteSettings(
       {
-        speed: 'fast',
+        speed: 'turbo',
         newline: 'cr',
-        imePreKey: 'Lang2',
+        imePreKey: 'Lang1',
         normalizePunct: 'yes',
         stripTrailingNewline: 0,
         hotkeyEnabled: 'true'
@@ -131,12 +145,15 @@ describe('normalisePasteSettings', () => {
       reviewFirst: true
     };
     expect(normalisePasteSettings(old, 'macOS')).toEqual({
-      version: 1,
-      speed: 'normal',
+      version: 2,
+      speed: 'fast',
       newline: 'enter',
       normalizePunct: true,
       stripTrailingNewline: true,
-      imePreKey: 'none',
+      imePreKey: 'Lang2',
+      unicodeMethod: 'auto',
+      bridgeWindow: 'chromium-private',
+      fixCapsLock: true,
       hotkeyEnabled: false,
       hotkey: { code: 'KeyV', meta: true, shift: true }
     });
@@ -175,8 +192,107 @@ describe('normalisePasteSettings', () => {
     expect(normalisePasteSettings(JSON.parse(JSON.stringify(once)), 'Windows')).toEqual(once);
   });
 
-  it('produces the PasteSettings type with the literal version 1', () => {
+  it('produces the PasteSettings type with the literal version 2', () => {
     const settings: PasteSettings = normalisePasteSettings({}, 'macOS');
-    expect(settings.version).toBe(1);
+    expect(settings.version).toBe(2);
+  });
+});
+
+describe('v1 → v2 migration', () => {
+  it("reads a v1 (or unversioned) 'none' IME pre-key as 'auto' and keeps 無変換", () => {
+    expect(normalisePasteSettings({ version: 1, imePreKey: 'none' }, 'macOS').imePreKey).toBe(
+      'auto'
+    );
+    expect(normalisePasteSettings({ imePreKey: 'none' }, 'macOS').imePreKey).toBe('auto');
+    expect(normalisePasteSettings({ version: 1, imePreKey: 'NonConvert' }, 'macOS').imePreKey).toBe(
+      'NonConvert'
+    );
+    // in v2 'none' is an explicit choice
+    expect(normalisePasteSettings({ version: 2, imePreKey: 'none' }, 'macOS').imePreKey).toBe(
+      'none'
+    );
+  });
+
+  it('turns a stored v1 object into v2 with the new fields at their defaults, idempotently', () => {
+    const v1 = {
+      version: 1,
+      speed: 'safe',
+      newline: 'enter',
+      normalizePunct: true,
+      stripTrailingNewline: false,
+      imePreKey: 'none',
+      hotkeyEnabled: true,
+      hotkey: { code: 'KeyV', meta: true, shift: true }
+    };
+    const v2 = normalisePasteSettings(v1, 'macOS');
+    expect(v2).toEqual({
+      ...defaultPasteSettings('macOS'),
+      speed: 'safe',
+      stripTrailingNewline: false
+    });
+    expect(Object.keys(v2).sort()).toEqual(KEYS);
+    // what a writer stores is read back unchanged
+    expect(normalisePasteSettings(JSON.parse(JSON.stringify(v2)), 'macOS')).toEqual(v2);
+  });
+
+  it('keeps every valid v2 value and resets invalid new fields to their defaults', () => {
+    const stored: PasteSettings = {
+      version: 2,
+      speed: 'fast',
+      newline: 'shift-enter',
+      normalizePunct: false,
+      stripTrailingNewline: false,
+      imePreKey: 'Lang2',
+      unicodeMethod: 'ctrl-shift-u',
+      bridgeWindow: 'firefox-private',
+      fixCapsLock: false,
+      hotkeyEnabled: false,
+      hotkey: { code: 'KeyB', ctrl: true }
+    };
+    expect(normalisePasteSettings(stored, 'Windows')).toEqual(stored);
+    for (const unicodeMethod of ['auto', 'bridge', 'ctrl-shift-u', 'skip']) {
+      expect(normalisePasteSettings({ unicodeMethod }, 'Windows').unicodeMethod).toBe(
+        unicodeMethod
+      );
+    }
+    for (const bridgeWindow of ['chromium-private', 'firefox-private', 'new-window']) {
+      expect(normalisePasteSettings({ bridgeWindow }, 'Windows').bridgeWindow).toBe(bridgeWindow);
+    }
+
+    expect(
+      normalisePasteSettings(
+        { version: 2, unicodeMethod: 'alt-x', bridgeWindow: 'tab', fixCapsLock: 'yes' },
+        'Windows'
+      )
+    ).toEqual(defaultPasteSettings('Windows'));
+  });
+});
+
+describe('resolveImePreKey / resolveUnicodeMethod', () => {
+  const OSES: TargetOs[] = ['windows', 'linux', 'macos'];
+
+  it("'auto' sends LANG2 to Windows targets only; explicit keys are unchanged", () => {
+    expect(resolveImePreKey('auto', 'windows')).toBe('Lang2');
+    expect(resolveImePreKey('auto', 'linux')).toBe('none');
+    expect(resolveImePreKey('auto', 'macos')).toBe('none');
+    const explicit: ImePreKeySetting[] = ['none', 'NonConvert', 'Lang2'];
+    for (const os of OSES) {
+      for (const key of explicit) expect(resolveImePreKey(key, os)).toBe(key);
+    }
+  });
+
+  it("'auto' is the bridge on Windows, Ctrl+Shift+U on Linux and skip on macOS", () => {
+    expect(resolveUnicodeMethod('auto', 'windows')).toBe('bridge');
+    expect(resolveUnicodeMethod('auto', 'linux')).toBe('ctrl-shift-u');
+    expect(resolveUnicodeMethod('auto', 'macos')).toBe('skip');
+  });
+
+  it('macOS targets always skip (both methods use Ctrl chords); elsewhere explicit wins', () => {
+    const methods: UnicodeMethodSetting[] = ['bridge', 'ctrl-shift-u', 'skip'];
+    for (const method of methods) {
+      expect(resolveUnicodeMethod(method, 'macos')).toBe('skip');
+      expect(resolveUnicodeMethod(method, 'windows')).toBe(method);
+      expect(resolveUnicodeMethod(method, 'linux')).toBe(method);
+    }
   });
 });

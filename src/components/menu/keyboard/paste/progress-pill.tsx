@@ -12,6 +12,7 @@ import { pasteController, type PasteUi } from './controller.ts';
 import {
   countSkipped,
   formatSkippedChars,
+  phaseKey,
   PILL_AUTO_HIDE_MS,
   reasonKey,
   showPill
@@ -36,6 +37,23 @@ export const PasteProgressPill = () => {
 
   // UI bridge for the controller
   useEffect(() => {
+    // keyboard capture off while a dialog is up (like the shortcut recorder),
+    // so Enter/Esc answer the dialog instead of reaching the target
+    function askConfirm(title: string, content: string): Promise<boolean> {
+      const wasEnabled = store.get(isKeyboardEnableAtom);
+      store.set(isKeyboardEnableAtom, false);
+      return new Promise<boolean>((resolve) => {
+        modalApi.confirm({
+          title,
+          content,
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false)
+        });
+      }).finally(() => {
+        store.set(isKeyboardEnableAtom, wasEnabled);
+      });
+    }
+
     const ui: PasteUi = {
       notify(notice, params) {
         messageApi.open({
@@ -46,20 +64,10 @@ export const PasteProgressPill = () => {
         });
       },
       confirmLarge(count, seconds) {
-        // keyboard capture off while the dialog is up (like the shortcut
-        // recorder), so Enter/Esc answer the dialog instead of reaching the target
-        const wasEnabled = store.get(isKeyboardEnableAtom);
-        store.set(isKeyboardEnableAtom, false);
-        return new Promise<boolean>((resolve) => {
-          modalApi.confirm({
-            title: t('paste.title'),
-            content: t('paste.confirmLarge', { count, seconds }),
-            onOk: () => resolve(true),
-            onCancel: () => resolve(false)
-          });
-        }).finally(() => {
-          store.set(isKeyboardEnableAtom, wasEnabled);
-        });
+        return askConfirm(t('paste.title'), t('paste.confirmLarge', { count, seconds }));
+      },
+      confirmBridge(seconds) {
+        return askConfirm(t('paste.bridgeIntroTitle'), t('paste.bridgeIntro', { seconds }));
       }
     };
 
@@ -127,7 +135,16 @@ export const PasteProgressPill = () => {
         {run.status === 'running' ? (
           <>
             <Loader2Icon size={16} className="shrink-0 animate-spin" />
-            <span className="whitespace-nowrap">
+            {/* a bridge run drives the target browser: say what it does and that hands stay off */}
+            {run.phase && (
+              <div className="flex flex-col">
+                <span className="whitespace-nowrap">{t(phaseKey(run.phase))}</span>
+                <span className="whitespace-nowrap text-xs text-amber-300">
+                  {t('paste.doNotTouch')}
+                </span>
+              </div>
+            )}
+            <span className={clsx('whitespace-nowrap', run.phase && 'text-xs text-neutral-400')}>
               {t('paste.progress', {
                 done: run.done,
                 total: run.total,

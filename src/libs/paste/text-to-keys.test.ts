@@ -6,6 +6,7 @@ import { CharCodes, ShiftChars } from '@/test/legacy-char-codes';
 
 import {
   DEFAULT_COMPILE_OPTIONS,
+  IME_SETTLE_MS,
   PASTE_HARD_LIMIT,
   PASTE_SOFT_LIMIT,
   textToKeySequence
@@ -205,7 +206,13 @@ describe('textToKeySequence', () => {
 
   it('emits the IME pre-key as the very first stroke and does not count it as typed', () => {
     const result = textToKeySequence('ab', opts({ imePreKey: 'NonConvert' }));
-    expect(result.strokes[0]).toEqual({ mod: 0, key: 0x8b, src: -1, tag: 'ime-pre' });
+    expect(result.strokes[0]).toEqual({
+      mod: 0,
+      key: 0x8b,
+      src: -1,
+      tag: 'ime-pre',
+      afterMs: IME_SETTLE_MS
+    });
     expect(result.strokes).toHaveLength(3);
     expect(result.stats.typed).toBe(2);
 

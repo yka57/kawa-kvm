@@ -11,11 +11,11 @@ This fork's hosted build: [yka57.github.io/kawa-kvm](https://yka57.github.io/kaw
 A personal fork of the browser app for a **Mac host** (MacBook trackpad, Japanese, Chrome)
 operating a Windows machine through a NanoKVM-USB. It adds three things on top of upstream:
 
-| Feature                                                                                                                                                                                                                                  | Where                                                    | Default                                                         |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
-| **⌘ key mapping** — ⌘ is sent as Ctrl (⌘C/⌘V/⌘F… arrive as Ctrl+C/V/F), plus Mac navigation rules (⌘←/→ → Home/End, ⌥←/→ → Ctrl+←/→, ⌘⇧[ ] → Ctrl+Shift+Tab / Ctrl+Tab)                                                                  | Keyboard menu → _⌘ key mapping (Mac)_ (macOS hosts only) | **On** while the host is macOS and the Target OS is not macOS   |
-| **Trackpad / scroll fidelity** — proportional two-finger scrolling with a _Scroll sensitivity_ slider, pointer capture in absolute mode (no stuck buttons), a _Pointer speed_ gain in relative mode, in-flight coalescing of mouse moves | Mouse menu → _Wheel speed_ / _Pointer speed_             | 100 px per notch, gain ×1.00                                    |
-| **Host clipboard → keystrokes** — one click (or ⌘⇧V) types the Mac clipboard on the target with the US or JIS key table, progress pill, cancel on any host key or click                                                                  | Keyboard menu → _Paste host clipboard_ (gear = settings) | Normal speed (20 ms / 20 ms), Enter, ⌘⇧V enabled on macOS hosts |
+| Feature                                                                                                                                                                                                                                                                      | Where                                                    | Default                                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **⌘ key mapping** — ⌘ is sent as Ctrl (⌘C/⌘V/⌘F… arrive as Ctrl+C/V/F), plus Mac navigation rules (⌘←/→ → Home/End, ⌥←/→ → Ctrl+←/→, ⌘⇧[ ] → Ctrl+Shift+Tab / Ctrl+Tab)                                                                                                      | Keyboard menu → _⌘ key mapping (Mac)_ (macOS hosts only) | **On** while the host is macOS and the Target OS is not macOS                     |
+| **Trackpad / scroll fidelity** — proportional two-finger scrolling with a _Scroll sensitivity_ slider, pointer capture in absolute mode (no stuck buttons), a _Pointer speed_ gain in relative mode, in-flight coalescing of mouse moves                                     | Mouse menu → _Wheel speed_ / _Pointer speed_             | 100 px per notch, gain ×1.00                                                      |
+| **Host clipboard → keystrokes** — one click (or ⌘⇧V) types the Mac clipboard on the target with the US or JIS key table, progress pill, cancel on any host key or click; Japanese and other non-ASCII text goes through the target browser (Windows) or Ctrl+Shift+U (Linux) | Keyboard menu → _Paste host clipboard_ (gear = settings) | Normal speed (20 ms / 20 ms), Enter, non-ASCII _Auto_, ⌘⇧V enabled on macOS hosts |
 
 Plus the shared _Target OS_ / _Target keyboard layout_ rows, a complete Japanese UI (auto-selected
 for Japanese browsers), a _Release all keys_ row and the HID log overlay described below.
@@ -23,8 +23,53 @@ for Japanese browsers), a _Release all keys_ row and the HID log overlay describ
 The full documentation is in Japanese:
 
 - [docs/README.ja.md](docs/README.ja.md) — every feature and setting with its default and storage key, side effects, known limits.
-- [docs/TESTING.ja.md](docs/TESTING.ja.md) — the hardware checklist (about 15 minutes) with result tables for the assumptions the design rests on and the open questions.
+- [docs/TESTING.ja.md](docs/TESTING.ja.md) — the hardware checklist (about 30 minutes) with result tables for the assumptions the design rests on and the open questions.
 - [docs/spec-v1.md](docs/spec-v1.md) — the implementation spec (English). Where it disagrees with the code, the code and this README describe what ships (see _Deviations from the spec_).
+- [docs/spec-v2-japanese-paste.md](docs/spec-v2-japanese-paste.md) — spec v2 (English): Japanese and other non-ASCII paste, the IME-off key and the Caps Lock pre-flight. Spec v1 still applies where it is silent.
+
+## Japanese and other non-ASCII text
+
+Spec: [docs/spec-v2-japanese-paste.md](docs/spec-v2-japanese-paste.md). Every stop message, the
+Linux caveats and the ETA table are in [docs/README.ja.md](docs/README.ja.md).
+
+Text the target layout can type completely (ASCII, after the optional punctuation folding) is typed
+key by key as before. Otherwise the _Japanese and other non-ASCII_ setting decides, and the text
+arrives byte-exact (no punctuation folding, no NFC). _Auto_ picks by Target OS:
+
+| Target OS | _Auto_ uses            | What happens                                                                                                            |
+| --------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Windows   | Via the target browser | The whole text, ASCII included, goes through a temporary private window in the target browser and is pasted with Ctrl+V |
+| Linux     | Ctrl+Shift+U           | Characters with a key are typed directly, every other code point as Ctrl+Shift+U, lowercase hex digits, Space           |
+| macOS     | Skip (ASCII only)      | Non-typeable characters are skipped and listed: both methods drive the target with Ctrl chords                          |
+
+The bridge, step by step (the pill shows each phase and _Don't touch anything until it finishes_):
+
+1. Open a window (Ctrl+Shift+N, Ctrl+Shift+P or Ctrl+N, see _Window opened by the bridge_) and
+   wait up to 4 s until a tenth of the captured screen has changed; Ctrl+L, then the IME-off key.
+2. First run after a page load or a change of layout, window, IME key or Target OS: type the probe
+   `data:text/html,<body bgcolor=magenta>` and wait up to 5 s for magenta, which proves that the
+   address bar takes the URL with this layout and IME.
+3. Type the text as a `data:text/html;charset=utf-8;base64,…` URL, then Delete and Enter. The page
+   puts it in a textarea and turns lime when its hash matches, red otherwise (red: Ctrl+W, stop).
+4. Escape, Ctrl+A, Ctrl+C; Ctrl+W and wait until the lime is gone; Ctrl+V into the field that had
+   the focus before.
+
+- **Requirements:** the target focus is in Chrome, Edge or Firefox (the window chord goes to the
+  foreground app); the video is showing and the HDMI capture shows the new window; the IME-off key
+  (HID LANG2, 0x91) needs Windows 10 2004+ or Windows 11 with the Japanese keyboard layout.
+- **Side effects:** a private window flashes; the target clipboard (and the Windows clipboard
+  history) holds the text; the target IME is left off; _Normal new window (Ctrl+N)_ keeps the URL,
+  and so the text, in the browser history.
+- The first bridge run shows a one-time explanation with the ETA (`nanokvm-usb-paste-bridge-intro`).
+  At Normal speed a run costs about 14 s plus 0.16 s per Japanese character (300 characters ≈ 1 min).
+- Every paste, whatever the method: Windows targets get the IME-off key before the text (the
+  bridge sends it in the new window's address bar), and a target Caps Lock that the device reports
+  as on is switched off first (JIS: Shift+CapsLock). Neither is restored.
+- New _Fast_ speed (10 ms hold / 10 ms gap / 60 ms after Enter). The settings are stored as
+  version 2; a version 1 `imePreKey: 'none'` becomes `'auto'`.
+- Not done: Windows Alt+numpad codes (the new Microsoft IME cuts values above 255 to their low byte,
+  RichEdit reads them as Unicode, NumLock off turns the keypad digits into Alt+arrows), splitting
+  long bridge texts, macOS targets, restoring the IME or Caps Lock state.
 
 ## Run it on the Mac
 
@@ -72,9 +117,12 @@ npm run build       # tsc -b && vite build
 The unit tests cover the pure modules: the ⌘ remap state machine and driver (byte-identical
 upstream traces while the remap is off), the wheel accumulator (regression against upstream's
 expression), relative motion and absolute mapping, the move queue, the paste compiler (US table
-parity with upstream's `charCodes.ts`, kept verbatim as `src/test/legacy-char-codes.ts`), the
-typing engine, the settings normalisers, the locale key parity between `en` and `ja`, and the HID
-log. The hardware checklist in `docs/TESTING.ja.md` covers what cannot be tested without the device.
+parity with upstream's `charCodes.ts`, kept verbatim as `src/test/legacy-char-codes.ts`), the paste
+planner, the browser bridge (the generated page script against `bridgeHash`, whole runs against a
+scripted screen), Ctrl+Shift+U entry, the frame probe, the CH9329 frame parser, the serial read
+loop and the lock-state query, the typing engine, the settings normalisers (including the v1 → v2
+migration), the locale key parity between `en` and `ja`, and the HID log. The hardware checklist in
+`docs/TESTING.ja.md` covers what cannot be tested without the device.
 
 ## Debugging: the HID log overlay
 
@@ -98,6 +146,8 @@ relative move):
 `rel` the relative mouse payload (signed int8). Δt is the time since the previous report of any
 kind. A report whose serial write failed is shown in red. The close button clears the flag
 (`nanokvm-usb-debug-hid`); a `?debug=hid` URL shows the panel again on the next load.
+Only reports for the target are logged: the device's replies and the paste's GET_INFO
+lock-state query are not.
 
 ## Behaviour changes versus upstream (for users who touch no setting)
 
@@ -121,8 +171,15 @@ kind. A report whose serial write failed is shown in red. The close button clear
   keyboard frames).
 - Paste types at 20 ms / 20 ms (upstream: a fixed 50 ms hold, no gap, no way to stop) with a
   progress pill, cancel, and hard stops on any host key, click, hidden tab or serial error. The JIS
-  table is used only when the Target layout row says JIS; non-ASCII characters are reported as
-  skipped instead of being dropped silently.
+  table is used only when the Target layout row says JIS. Text the layout cannot type (Japanese
+  etc.) goes through the target browser on Windows targets and Ctrl+Shift+U on Linux targets; on
+  macOS targets it is reported as skipped instead of being dropped silently.
+- Windows targets get the IME-off key (HID LANG2) before the text of a paste, and a target Caps
+  Lock that the device reports as on is switched off first.
+- The serial port is read continuously (upstream left the device's replies unread). With _Turn the
+  target Caps Lock off automatically_ on (the default), a paste first asks the CH9329 for the
+  target's lock state with GET_INFO (`57 AB 00 01 00 03`); that command goes to the chip, not to
+  the target.
 - Japanese-locale browsers get the Japanese UI.
 
 Everything else on the wire is byte-identical to upstream (verified by the parity tests).
@@ -135,6 +192,11 @@ Everything else on the wire is byte-identical to upstream (verified by the parit
   spec §7 lists an HID queue as not done.
 - `cmdTabSwitch` (⌘⇧[ / ⌘⇧]) matches on the printed character when the event carries one, so it
   also works on a JIS Mac where `[` has the code `BracketRight`.
+
+### Notes on `docs/spec-v2-japanese-paste.md`
+
+- Where the spec is silent: the bridge replaces lone surrogates with U+FFFD before building the
+  page (UTF-8 cannot carry them, so the page would always turn red).
 
 ## Development
 

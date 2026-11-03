@@ -12,7 +12,14 @@ import { pasteSettingsAtom } from '@/jotai/paste.ts';
 import { targetLayoutAtom, targetOsAtom } from '@/jotai/target.ts';
 import { getOperatingSystem } from '@/libs/browser';
 import { isRemapActive } from '@/libs/keyboard/remap-config';
-import { normalisePasteSettings, type PasteSettings } from '@/libs/paste/settings';
+import {
+  normalisePasteSettings,
+  resolveUnicodeMethod,
+  type BridgeWindow,
+  type ImePreKeySetting,
+  type PasteSettings,
+  type UnicodeMethodSetting
+} from '@/libs/paste/settings';
 import type { NewlineMode } from '@/libs/paste/types';
 import type { SpeedPreset } from '@/libs/paste/typing-engine';
 import * as storage from '@/libs/storage';
@@ -22,10 +29,10 @@ import { pasteController, pasteSettingsModalAtom } from './controller.ts';
 import { chordFromKeyEvent, formatChord } from './decide.ts';
 
 /**
- * Paste settings modal (spec §5.5), mounted once in App.tsx and opened from
- * the gear of the Paste row or by the controller when clipboard access is
- * blocked. Keyboard capture is off while it is open, like the shortcut
- * recorder, so typing in the text box never reaches the target.
+ * Paste settings modal (spec v1 §5.5, v2 §10), mounted once in App.tsx and
+ * opened from the gear of the Paste row or by the controller when clipboard
+ * access is blocked. Keyboard capture is off while it is open, like the
+ * shortcut recorder, so typing in the text box never reaches the target.
  */
 export const PasteSettingsModal = () => {
   const { t } = useTranslation();
@@ -47,6 +54,8 @@ export const PasteSettingsModal = () => {
     [rawSettings, hostOS]
   );
   const remapActive = isRemapActive(remapConfig, hostOS, targetOs);
+  // what a paste with non-ASCII text would actually do on this target
+  const unicodeMethod = resolveUnicodeMethod(settings.unicodeMethod, targetOs);
   const isOpen = modalState.open;
 
   const update = useCallback(
@@ -123,16 +132,40 @@ export const PasteSettingsModal = () => {
   ];
   const speedOptions: { value: SpeedPreset; label: string }[] = [
     { value: 'safe', label: t('paste.speedSafe') },
-    { value: 'normal', label: t('paste.speedNormal') }
+    { value: 'normal', label: t('paste.speedNormal') },
+    { value: 'fast', label: t('paste.speedFast') }
   ];
   const newlineOptions: { value: NewlineMode; label: string }[] = [
     { value: 'enter', label: t('paste.newlineEnter') },
     { value: 'shift-enter', label: t('paste.newlineShiftEnter') }
   ];
+  const unicodeMethodOptions: { value: UnicodeMethodSetting; label: string }[] = [
+    { value: 'auto', label: t('paste.unicodeAuto') },
+    { value: 'bridge', label: t('paste.unicodeBridge') },
+    { value: 'ctrl-shift-u', label: t('paste.unicodeCtrlShiftU') },
+    { value: 'skip', label: t('paste.unicodeSkip') }
+  ];
+  const bridgeWindowOptions: { value: BridgeWindow; label: string }[] = [
+    { value: 'chromium-private', label: t('paste.bridgeChromium') },
+    { value: 'firefox-private', label: t('paste.bridgeFirefox') },
+    { value: 'new-window', label: t('paste.bridgeNewWindow') }
+  ];
+  const imePreKeyOptions: { value: ImePreKeySetting; label: string }[] = [
+    { value: 'auto', label: t('paste.imeAuto') },
+    { value: 'Lang2', label: t('paste.imeLang2') },
+    { value: 'NonConvert', label: t('paste.imeNonConvert') },
+    { value: 'none', label: t('paste.imeNone') }
+  ];
+  const unicodeHint =
+    unicodeMethod === 'bridge'
+      ? 'paste.bridgeHint'
+      : unicodeMethod === 'ctrl-shift-u'
+        ? 'paste.unicodeHint'
+        : null;
 
   return (
     <Modal
-      width={520}
+      width={560}
       title={t('paste.settings')}
       keyboard={false}
       footer={null}
@@ -160,11 +193,14 @@ export const PasteSettingsModal = () => {
 
         <Divider style={{ margin: 0 }} />
 
-        <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-3">
+        {/* long option labels: the selects fill a column that may shrink (the value is
+            ellipsized) and their menus grow to fit the text */}
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-3">
           <span className="text-neutral-400">{t('target.layout')}</span>
           <Select
             size="small"
-            className="w-44"
+            className="w-full"
+            popupMatchSelectWidth={false}
             value={targetLayout}
             options={layoutOptions}
             onChange={updateLayout}
@@ -173,7 +209,8 @@ export const PasteSettingsModal = () => {
           <span className="text-neutral-400">{t('paste.speed')}</span>
           <Select
             size="small"
-            className="w-44"
+            className="w-full"
+            popupMatchSelectWidth={false}
             value={settings.speed}
             options={speedOptions}
             onChange={(speed) => update({ speed })}
@@ -182,10 +219,45 @@ export const PasteSettingsModal = () => {
           <span className="text-neutral-400">{t('paste.newline')}</span>
           <Select
             size="small"
-            className="w-44"
+            className="w-full"
+            popupMatchSelectWidth={false}
             value={settings.newline}
             options={newlineOptions}
             onChange={(newline) => update({ newline })}
+          />
+
+          <span className="text-neutral-400">{t('paste.unicodeMethod')}</span>
+          <Select
+            size="small"
+            className="w-full"
+            popupMatchSelectWidth={false}
+            value={settings.unicodeMethod}
+            options={unicodeMethodOptions}
+            onChange={(method) => update({ unicodeMethod: method })}
+          />
+          {unicodeHint && (
+            <span className="col-span-2 -mt-1 text-xs text-neutral-500">{t(unicodeHint)}</span>
+          )}
+
+          <span className="text-neutral-400">{t('paste.bridgeWindow')}</span>
+          <Select
+            size="small"
+            className="w-full"
+            popupMatchSelectWidth={false}
+            disabled={unicodeMethod !== 'bridge'}
+            value={settings.bridgeWindow}
+            options={bridgeWindowOptions}
+            onChange={(bridgeWindow) => update({ bridgeWindow })}
+          />
+
+          <span className="text-neutral-400">{t('paste.imePreKey')}</span>
+          <Select
+            size="small"
+            className="w-full"
+            popupMatchSelectWidth={false}
+            value={settings.imePreKey}
+            options={imePreKeyOptions}
+            onChange={(imePreKey) => update({ imePreKey })}
           />
         </div>
 
@@ -203,10 +275,10 @@ export const PasteSettingsModal = () => {
             {t('paste.stripTrailingNewline')}
           </Checkbox>
           <Checkbox
-            checked={settings.imePreKey === 'NonConvert'}
-            onChange={(e) => update({ imePreKey: e.target.checked ? 'NonConvert' : 'none' })}
+            checked={settings.fixCapsLock}
+            onChange={(e) => update({ fixCapsLock: e.target.checked })}
           >
-            {t('paste.imeOff')}
+            {t('paste.fixCapsLock')}
           </Checkbox>
         </div>
 

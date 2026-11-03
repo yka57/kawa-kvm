@@ -3,8 +3,8 @@ import type { System } from '@/libs/browser';
 import { isModifier } from '@/libs/keyboard/keymap.ts';
 import type { PasteHotkey } from '@/libs/paste/settings';
 import { PASTE_SOFT_LIMIT } from '@/libs/paste/text-to-keys';
-import type { CompileResult, SkippedChar } from '@/libs/paste/types';
-import type { Pacing, StopReason } from '@/libs/paste/typing-engine';
+import type { CompileStats, SkippedChar } from '@/libs/paste/types';
+import type { PastePhase, StopReason } from '@/libs/paste/typing-engine';
 
 /**
  * Pure decision helpers of the paste controller and the progress pill
@@ -14,23 +14,15 @@ import type { Pacing, StopReason } from '@/libs/paste/typing-engine';
 export type StartDecision = 'run' | 'confirm' | 'nothing' | 'notConnected';
 
 /**
- * Whether a compiled clipboard runs, needs a confirmation first (soft limit)
- * or is refused. `serialState` is the value of serialStateAtom.
+ * Whether a planned clipboard runs, needs a confirmation first (soft limit)
+ * or is refused. Every plan kind carries the same stats (spec v2 §3);
+ * `serialState` is the value of serialStateAtom.
  */
-export function decideStart(result: CompileResult, serialState: string): StartDecision {
+export function decideStart(plan: { stats: CompileStats }, serialState: string): StartDecision {
   if (serialState !== 'connected') return 'notConnected';
-  if (result.stats.typed === 0) return 'nothing';
-  if (result.stats.chars > PASTE_SOFT_LIMIT) return 'confirm';
+  if (plan.stats.typed === 0) return 'nothing';
+  if (plan.stats.chars > PASTE_SOFT_LIMIT) return 'confirm';
   return 'run';
-}
-
-/** Wall-clock estimate of a run: the engine's per-stroke pacing, summed. */
-export function estimateRunMs(result: CompileResult, pacing: Pacing): number {
-  let total = 0;
-  for (const stroke of result.strokes) {
-    total += pacing.holdMs + pacing.gapMs + (stroke.tag === 'enter' ? pacing.afterEnterMs : 0);
-  }
-  return total;
 }
 
 export type ClipboardFailure = 'noFocus' | 'permDenied' | 'empty';
@@ -124,12 +116,33 @@ const REASON_KEYS: Record<StopReason, string> = {
   'tab-hidden': 'doneHidden',
   'serial-error': 'doneSerial',
   // never shown: a busy lock means another run is in progress (no state written)
-  'lock-busy': 'doneCancelled'
+  'lock-busy': 'doneCancelled',
+  'bridge-no-window': 'doneNoWindow',
+  'bridge-probe-failed': 'doneProbeFailed',
+  'bridge-load-failed': 'doneLoadFailed',
+  'bridge-verify-failed': 'doneVerifyFailed',
+  'bridge-close-failed': 'doneCloseFailed',
+  'caps-lock': 'doneCapsLock'
 };
 
 /** i18n key of the stop reason line. */
 export function reasonKey(reason: StopReason): string {
   return `paste.${REASON_KEYS[reason]}`;
+}
+
+const PHASE_KEYS: Record<PastePhase, string> = {
+  window: 'phaseWindow',
+  probe: 'phaseProbe',
+  type: 'phaseType',
+  verify: 'phaseVerify',
+  copy: 'phaseCopy',
+  close: 'phaseClose',
+  paste: 'phasePaste'
+};
+
+/** i18n key of the bridge stage the pill shows while running (spec v2 §10). */
+export function phaseKey(phase: PastePhase): string {
+  return `paste.${PHASE_KEYS[phase]}`;
 }
 
 const MAC_MODIFIER_LABELS = { meta: '⌘', ctrl: '⌃', alt: '⌥', shift: '⇧' } as const;

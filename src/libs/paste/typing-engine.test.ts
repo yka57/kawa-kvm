@@ -1,18 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HidLock } from '@/libs/keyboard/hid-lock';
-import type { TargetLayout } from '@/libs/paste/types';
+import { KeycodeMap, ModifierBits } from '@/libs/keyboard/keymap';
+import type { KeyStroke, TargetLayout } from '@/libs/paste/types';
 import { FakeClock, FakeSink, flushMicrotasks } from '@/test/fakes';
 
 import { textToKeySequence } from './text-to-keys';
 import {
+  DEFAULT_WAIT_INTERVAL_MS,
   DEFAULT_WATCHDOG_MS,
   DEFAULT_WRITE_TIMEOUT_MS,
+  estimateProgramMs,
   isInterruptingKeyDown,
   PACING,
   TypingEngine,
   type EngineDeps,
-  type EngineEvent
+  type EngineEvent,
+  type ProgramStep,
+  type WaitStep,
+  type WaitVerdict
 } from './typing-engine';
 
 const ZERO = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -122,7 +128,8 @@ describe('TypingEngine', () => {
     expect(result.reason).toBe('completed');
     expect(PACING).toEqual({
       safe: { holdMs: 50, gapMs: 50, afterEnterMs: 150 },
-      normal: { holdMs: 20, gapMs: 20, afterEnterMs: 100 }
+      normal: { holdMs: 20, gapMs: 20, afterEnterMs: 100 },
+      fast: { holdMs: 10, gapMs: 10, afterEnterMs: 60 }
     });
   });
 
@@ -530,5 +537,456 @@ describe('isInterruptingKeyDown (shared with the keyboard adapter)', () => {
     expect(isInterruptingKeyDown(key('Enter'), inside)).toBe(false);
     expect(isInterruptingKeyDown(key('Escape'), inside)).toBe(true);
     expect(isInterruptingKeyDown(key('Escape', true), inside)).toBe(false);
+  });
+});
+
+const KEY_C = [0, 0, 0x06, 0, 0, 0, 0, 0];
+const CTRL_W = [ModifierBits.LeftCtrl, 0, KeycodeMap.KeyW, 0, 0, 0, 0, 0];
+
+function stroke(key: number, extra: Partial<KeyStroke> = {}): KeyStroke {
+  return { mod: 0, key, src: 0, tag: 'char', ...extra };
+}
+
+const A = stroke(0x04);
+const B = stroke(0x05);
+
+/** Starts a program and lets the ARM report and its first sends go out at t=0 (like start()). */
+async function begin(engine: TypingEngine, steps: ProgramStep[], pacing = PACING.normal) {
+  const result = engine.runProgram(steps, pacing);
+  await flushMicrotasks();
+  return { result };
+}
+
+function wait(check: WaitStep['check'], over: Partial<WaitStep> = {}): WaitStep {
+  return {
+    kind: 'wait',
+    check,
+    timeoutMs: 1000,
+    estimateMs: 300,
+    timeoutReason: 'bridge-no-window',
+    ...over
+  };
+}
+
+describe('TypingEngine.runProgram', () => {
+  it('runs keys, sleeps, callbacks and phases in order; events carry the latest phase', async () => {
+    const t = setup();
+    const calls: number[] = [];
+    const steps: ProgramStep[] = [
+      { kind: 'phase', phase: 'window' },
+      { kind: 'keys', strokes: [A] },
+      { kind: 'sleep', ms: 500 },
+      { kind: 'run', fn: () => calls.push(t.clock.now()) },
+      { kind: 'phase', phase: 'paste' },
+      { kind: 'keys', strokes: [B] }
+    ];
+    const { result: promise } = await begin(t.engine, steps, PACING.normal);
+    await t.clock.advanceAsync(1000);
+
+    expect(await promise).toEqual({ reason: 'completed', typedStrokes: 2, totalStrokes: 2 });
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, KEY_B, ZERO, ZERO]);
+    // A, its gap (B is still to come), the sleep, then B with no gap before FINISH
+    expect(t.times).toEqual([0, 0, 20, 540, 560, 560]);
+    expect(calls).toEqual([540]);
+    expect(t.events).toEqual([
+      { type: 'start', done: 0, total: 2, etaMs: 580 },
+      { type: 'progress', done: 0, total: 2, etaMs: 580, phase: 'window' },
+      { type: 'progress', done: 1, total: 2, etaMs: 40, phase: 'window' },
+      { type: 'progress', done: 1, total: 2, etaMs: 40, phase: 'paste' },
+      { type: 'progress', done: 2, total: 2, etaMs: 0, phase: 'paste' },
+      { type: 'stop', done: 2, total: 2, etaMs: 0, reason: 'completed', phase: 'paste' }
+    ]);
+    expect(t.clock.pendingTimers()).toBe(0);
+  });
+
+  it('a single keys step of compiled strokes behaves exactly like run()', async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [{ kind: 'keys', strokes: compile('aa').strokes }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(200);
+    expect(await promise).toEqual({ reason: 'completed', typedStrokes: 2, totalStrokes: 2 });
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, KEY_A, ZERO, ZERO]);
+    expect(t.times).toEqual([0, 0, 20, 40, 60, 60]);
+    expect(t.events.every((e) => e.phase === undefined)).toBe(true);
+  });
+
+  it('logs a throwing run step and goes on', async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [
+        {
+          kind: 'run',
+          fn: () => {
+            throw new Error('boom');
+          }
+        },
+        { kind: 'keys', strokes: [A] }
+      ],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(100);
+    expect((await promise).reason).toBe('completed');
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, ZERO]);
+    expect(console.error).toHaveBeenCalledWith('[paste] program step threw', expect.any(Error));
+  });
+
+  it('honours afterMs after the gap, but sleeps nothing after the last stroke of the program', async () => {
+    const t = setup();
+    const steps: ProgramStep[] = [
+      { kind: 'keys', strokes: [stroke(0x04, { afterMs: 150 }), stroke(0x05, { afterMs: 500 })] },
+      wait(() => 'ok', { estimateMs: 0 })
+    ];
+    expect(estimateProgramMs(steps, PACING.normal)).toBe(190 + 540);
+    const { result: promise } = await begin(t.engine, steps, PACING.normal);
+    await t.clock.advanceAsync(1000);
+    expect((await promise).reason).toBe('completed');
+    expect(t.times).toEqual([0, 0, 20, 190, 210, 210]);
+  });
+
+  it('types at 10/10 ms with the fast preset', async () => {
+    const t = setup();
+    const { result } = await start(t.engine, 'aa', PACING.fast);
+    await t.clock.advanceAsync(100);
+    expect((await result).reason).toBe('completed');
+    expect(t.times).toEqual([0, 0, 10, 20, 30, 30]);
+    expect(t.events[0]).toMatchObject({ type: 'start', etaMs: 40 });
+  });
+
+  it('counts strokes, Enter pauses, afterMs, sleeps and wait estimates in the ETA', async () => {
+    const t = setup();
+    const steps: ProgramStep[] = [
+      { kind: 'keys', strokes: [A, stroke(KeycodeMap.Enter, { tag: 'enter' })] },
+      { kind: 'sleep', ms: 600 },
+      wait(() => 'ok', { estimateMs: 800 }),
+      { kind: 'run', fn: () => undefined },
+      { kind: 'phase', phase: 'copy' },
+      { kind: 'keys', strokes: [stroke(0x06, { afterMs: 250 })] }
+    ];
+    // 40 + (40 + 100) + 600 + 800 + (40 + 250)
+    expect(estimateProgramMs(steps, PACING.normal)).toBe(1870);
+    expect(estimateProgramMs(steps, PACING.safe)).toBe(100 + 250 + 600 + 800 + 350);
+
+    const { result: promise } = await begin(t.engine, steps, PACING.normal);
+    await t.clock.advanceAsync(2000);
+    expect((await promise).reason).toBe('completed');
+    expect(t.events[0]).toEqual({ type: 'start', done: 0, total: 3, etaMs: 1870 });
+    const progress = t.events.filter((e) => e.type === 'progress');
+    for (let i = 1; i < progress.length; i++) {
+      expect(progress[i].etaMs).toBeLessThanOrEqual(progress[i - 1].etaMs);
+    }
+    // the wait finished immediately: its estimate is spent, only the last stroke is left
+    expect(progress.find((e) => e.phase === 'copy')).toMatchObject({ done: 2, etaMs: 290 });
+    expect(progress[progress.length - 1]).toMatchObject({ done: 3, etaMs: 0 });
+  });
+
+  it('resolves lock-busy with the stroke total of keys steps only', async () => {
+    const t = setup();
+    t.lock.acquire('paste');
+    const steps: ProgramStep[] = [
+      { kind: 'keys', strokes: [A, B] },
+      wait(() => 'fail', { onFail: [A] }),
+      { kind: 'keys', strokes: [A] }
+    ];
+    expect(await t.engine.runProgram(steps, PACING.normal)).toEqual({
+      reason: 'lock-busy',
+      typedStrokes: 0,
+      totalStrokes: 3
+    });
+    expect(t.sink.reports).toEqual([]);
+  });
+});
+
+describe('TypingEngine wait steps', () => {
+  it('polls every intervalMs until ok, then goes on', async () => {
+    const t = setup();
+    const polls: number[] = [];
+    const check = (): WaitVerdict => {
+      polls.push(t.clock.now());
+      return polls.length === 3 ? 'ok' : 'pending';
+    };
+    const { result: promise } = await begin(
+      t.engine,
+      [{ kind: 'keys', strokes: [A] }, wait(check), { kind: 'keys', strokes: [B] }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(1000);
+    expect(await promise).toEqual({ reason: 'completed', typedStrokes: 2, totalStrokes: 2 });
+    expect(DEFAULT_WAIT_INTERVAL_MS).toBe(100);
+    expect(polls).toEqual([40, 140, 240]);
+    expect(t.times).toEqual([0, 0, 20, 240, 260, 260]);
+  });
+
+  it('stops with timeoutReason at the deadline; the lock is held until FINISH', async () => {
+    const t = setup();
+    const polls: number[] = [];
+    const { result: promise } = await begin(
+      t.engine,
+      [
+        { kind: 'keys', strokes: [A] },
+        wait(
+          () => {
+            polls.push(t.clock.now());
+            return 'pending';
+          },
+          { timeoutMs: 1000, intervalMs: 250 }
+        ),
+        { kind: 'keys', strokes: [B] }
+      ],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(500);
+    expect(t.engine.state).toBe('running');
+    expect(t.lock.owner).toBe('paste');
+    await t.clock.advanceAsync(1000);
+
+    expect(await promise).toEqual({ reason: 'bridge-no-window', typedStrokes: 1, totalStrokes: 2 });
+    // the last poll lands on the deadline
+    expect(polls).toEqual([40, 290, 540, 790, 1040]);
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, ZERO]);
+    expect(t.times[t.times.length - 1]).toBe(1040);
+    expect(t.lock.owner).toBeNull();
+    expect(t.clock.pendingTimers()).toBe(0);
+    expect(t.events[t.events.length - 1]).toMatchObject({
+      type: 'stop',
+      reason: 'bridge-no-window'
+    });
+  });
+
+  it('fail: sends onFail (uncounted, not cancellable) and stops with failReason', async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [
+        { kind: 'keys', strokes: [A] },
+        wait(() => 'fail', {
+          timeoutReason: 'bridge-load-failed',
+          failReason: 'bridge-verify-failed',
+          onFail: [stroke(KeycodeMap.KeyW, { mod: ModifierBits.LeftCtrl, tag: 'chord' })]
+        }),
+        { kind: 'keys', strokes: [B] }
+      ],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(50); // the failure keys are being held
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, CTRL_W]);
+    t.engine.cancel();
+    t.target.dispatchEvent(keydown('KeyQ'));
+    expect(t.lock.owner).toBe('paste');
+    await t.clock.advanceAsync(100);
+
+    expect(await promise).toEqual({
+      reason: 'bridge-verify-failed',
+      typedStrokes: 1,
+      totalStrokes: 2
+    });
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, CTRL_W, ZERO, ZERO]);
+    expect(t.times).toEqual([0, 0, 20, 40, 60, 60]);
+    expect(t.lock.owner).toBeNull();
+  });
+
+  it('fail without a failReason stops with the timeoutReason; a failing onFail send is swallowed', async () => {
+    const t = setup();
+    t.sink.rejectAt = 4; // the onFail press
+    const { result: promise } = await begin(
+      t.engine,
+      [{ kind: 'keys', strokes: [A] }, wait(() => 'fail', { onFail: [A, B] })],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(200);
+    expect((await promise).reason).toBe('bridge-no-window');
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, KEY_A, ZERO]);
+  });
+
+  it('a throwing or rejecting check is pending; async verdicts are awaited', async () => {
+    const t = setup();
+    const answers: Array<() => WaitVerdict | Promise<WaitVerdict>> = [
+      () => {
+        throw new Error('no frame');
+      },
+      () => Promise.reject(new Error('no answer')),
+      () => Promise.resolve('pending'),
+      () => 'what' as WaitVerdict,
+      () => Promise.resolve('ok')
+    ];
+    let n = 0;
+    const { result: promise } = await begin(
+      t.engine,
+      [wait(() => answers[n++](), { intervalMs: 10 }), { kind: 'keys', strokes: [A] }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(200);
+    expect((await promise).reason).toBe('completed');
+    expect(n).toBe(5);
+    expect(t.times).toEqual([0, 40, 60, 60]);
+  });
+
+  it('a check that outlives the deadline times out', async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [wait(() => new Promise<WaitVerdict>(() => undefined), { timeoutMs: 500 })],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(499);
+    expect(t.engine.state).toBe('running');
+    await t.clock.advanceAsync(2);
+    expect((await promise).reason).toBe('bridge-no-window');
+    expect(t.times).toEqual([0, 500]);
+    expect(t.clock.pendingTimers()).toBe(0);
+  });
+
+  it('a cancel aborts the wait at once, also while a check is pending', async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [wait(() => 'pending', { timeoutMs: 10_000 }), { kind: 'keys', strokes: [A] }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(1050);
+    t.engine.cancel();
+    expect(t.lock.isLocked()).toBe(false);
+    await flushMicrotasks();
+    expect(await promise).toEqual({ reason: 'cancelled', typedStrokes: 0, totalStrokes: 1 });
+    expect(t.times).toEqual([0, 1050]);
+
+    const slow = setup();
+    const { result: slowPromise } = await begin(
+      slow.engine,
+      [wait(() => new Promise<WaitVerdict>(() => undefined), { timeoutMs: 10_000 })],
+      PACING.normal
+    );
+    await slow.clock.advanceAsync(300);
+    slow.target.dispatchEvent(new Event('mousedown'));
+    await flushMicrotasks();
+    expect((await slowPromise).reason).toBe('mouse-interrupt');
+    expect(slow.times).toEqual([0, 300]);
+    expect(slow.clock.pendingTimers()).toBe(0);
+  });
+});
+
+describe('TypingEngine watchdog', () => {
+  it('stays quiet through sleeps and waits longer than watchdogMs', async () => {
+    const t = setup({ watchdogMs: 3000 });
+    let polls = 0;
+    const { result: promise } = await begin(
+      t.engine,
+      [
+        { kind: 'keys', strokes: [A] },
+        { kind: 'sleep', ms: 5000 },
+        wait(() => (++polls === 46 ? 'ok' : 'pending'), { timeoutMs: 10_000 }),
+        { kind: 'keys', strokes: [B] }
+      ],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(12_000, 10);
+    expect(await promise).toEqual({ reason: 'completed', typedStrokes: 2, totalStrokes: 2 });
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, KEY_B, ZERO, ZERO]);
+  });
+
+  it('is re-armed by the next send: a write hanging after a wait still stops the run', async () => {
+    const t = setup({ watchdogMs: 3000, writeTimeoutMs: 10_000 });
+    t.sink.hangAt = 2; // the press after the wait
+    const { result: promise } = await begin(
+      t.engine,
+      [
+        wait(() => (t.clock.now() >= 4000 ? 'ok' : 'pending'), { timeoutMs: 5000 }),
+        { kind: 'keys', strokes: [A] }
+      ],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(6999);
+    expect(t.engine.state).toBe('running');
+    await t.clock.advanceAsync(2);
+    expect((await promise).reason).toBe('serial-error');
+    expect(t.times).toEqual([0, 4000, 7000]);
+    expect(t.clock.pendingTimers()).toBe(0);
+    t.sink.releaseHung();
+  });
+});
+
+describe('TypingEngine atomic groups', () => {
+  const group = (key: number, id: number) => stroke(key, { group: id, tag: 'unicode' });
+
+  it('defers a cancel inside a group to its last release, keeping the lock and the first reason', async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [{ kind: 'keys', strokes: [group(0x04, 1), group(0x05, 1), group(0x06, 1), A] }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(10); // holding the group's first key
+    t.engine.cancel();
+    t.target.dispatchEvent(keydown('KeyQ'));
+    t.lock.interrupt('keydown');
+    expect(t.engine.state).toBe('running');
+    expect(t.lock.owner).toBe('paste');
+
+    await t.clock.advanceAsync(89);
+    expect(t.lock.owner).toBe('paste');
+    await t.clock.advanceAsync(1);
+    // the group's last release at 100 is followed by the stop, not by its gap
+    expect(t.lock.isLocked()).toBe(false);
+    await flushMicrotasks();
+    expect(await promise).toEqual({ reason: 'cancelled', typedStrokes: 3, totalStrokes: 4 });
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, KEY_B, ZERO, KEY_C, ZERO, ZERO]);
+    expect(t.times).toEqual([0, 0, 20, 40, 60, 80, 100, 100]);
+  });
+
+  it('never defers serial-error (disconnect, watchdog, write timeout)', async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [{ kind: 'keys', strokes: [group(0x04, 1), group(0x05, 1)] }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(10);
+    t.engine.cancel();
+    t.engine.cancel('serial-error');
+    expect(t.lock.isLocked()).toBe(false);
+    await flushMicrotasks();
+    expect(await promise).toEqual({ reason: 'serial-error', typedStrokes: 0, totalStrokes: 2 });
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO]);
+
+    const hung = setup({ writeTimeoutMs: 100 });
+    hung.sink.hangAt = 3; // the release of the group's first key
+    const { result: hungPromise } = await begin(
+      hung.engine,
+      [{ kind: 'keys', strokes: [group(0x04, 1), group(0x05, 1)] }],
+      PACING.normal
+    );
+    await hung.clock.advanceAsync(200);
+    expect((await hungPromise).reason).toBe('serial-error');
+    hung.sink.releaseHung();
+  });
+
+  it('cancels at once between groups and outside them', async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [{ kind: 'keys', strokes: [group(0x04, 1), group(0x05, 2), A] }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(30); // the gap after group 1
+    t.engine.cancel();
+    expect(t.lock.isLocked()).toBe(false);
+    await flushMicrotasks();
+    expect(await promise).toEqual({ reason: 'cancelled', typedStrokes: 1, totalStrokes: 3 });
+    expect(t.times).toEqual([0, 0, 20, 30]);
+
+    // a new run starts with no group open and no deferred reason left over
+    const { result: again } = await begin(
+      t.engine,
+      [{ kind: 'keys', strokes: [A, B] }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(10);
+    t.engine.cancel();
+    expect(t.lock.isLocked()).toBe(false);
+    await flushMicrotasks();
+    expect((await again).reason).toBe('cancelled');
   });
 });

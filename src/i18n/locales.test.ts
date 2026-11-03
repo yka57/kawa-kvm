@@ -94,7 +94,6 @@ describe('locale parity', () => {
       'paste.newlineShiftEnter',
       'paste.normalize',
       'paste.stripTrailingNewline',
-      'paste.imeOff',
       'paste.hotkey',
       'paste.hotkeyNeedsRemap',
       'paste.change',
@@ -123,6 +122,49 @@ describe('locale parity', () => {
     expect(missing).toEqual([]);
     // the first-run badge was dropped on purpose
     expect(enLeafKeys).not.toContain('keyboard.remap.badgeTip');
+  });
+
+  it('en contains every paste key of spec v2 §10, and the old IME checkbox key is gone', () => {
+    const required = [
+      'speedFast',
+      'unicodeMethod',
+      'unicodeAuto',
+      'unicodeBridge',
+      'unicodeCtrlShiftU',
+      'unicodeSkip',
+      'bridgeHint',
+      'unicodeHint',
+      'bridgeWindow',
+      'bridgeChromium',
+      'bridgeFirefox',
+      'bridgeNewWindow',
+      'imePreKey',
+      'imeAuto',
+      'imeLang2',
+      'imeNonConvert',
+      'imeNone',
+      'fixCapsLock',
+      'bridgeIntroTitle',
+      'bridgeIntro',
+      'phaseWindow',
+      'phaseProbe',
+      'phaseType',
+      'phaseVerify',
+      'phaseCopy',
+      'phaseClose',
+      'phasePaste',
+      'doNotTouch',
+      'doneNoWindow',
+      'doneProbeFailed',
+      'doneLoadFailed',
+      'doneVerifyFailed',
+      'doneCloseFailed',
+      'doneCapsLock',
+      'noVideo'
+    ].map((key) => `paste.${key}`);
+    const missing = required.filter((key) => !enLeafKeys.includes(key));
+    expect(missing).toEqual([]);
+    expect(enLeafKeys).not.toContain('paste.imeOff');
   });
 
   it('every other locale is a subset of en (extra keys only warn)', () => {

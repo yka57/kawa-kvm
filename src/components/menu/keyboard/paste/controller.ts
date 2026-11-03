@@ -6,38 +6,52 @@ import {
   IDLE_PASTE_RUN,
   pasteRunAtom,
   pasteSettingsAtom,
+  type PasteMethod,
   type PasteRunState
 } from '@/jotai/paste.ts';
-import { targetLayoutAtom } from '@/jotai/target.ts';
+import { targetLayoutAtom, targetOsAtom, type TargetOs } from '@/jotai/target.ts';
 import { getOperatingSystem, type System } from '@/libs/browser';
 import { realClock } from '@/libs/clock';
-import { device } from '@/libs/device';
+import { device, type LockState } from '@/libs/device';
 import type { KeyboardDriver } from '@/libs/keyboard/driver';
 import { hidLock, type HidLock } from '@/libs/keyboard/hid-lock';
-import { normalisePasteSettings } from '@/libs/paste/settings';
-import { PASTE_HARD_LIMIT, textToKeySequence } from '@/libs/paste/text-to-keys';
-import type { CompileResult } from '@/libs/paste/types';
+import { createVideoSampler, type FrameSampler } from '@/libs/media/frame-probe';
+import { buildBridgeProgram, buildBridgeUrl } from '@/libs/paste/bridge';
+import { buildCapsLockPreflight } from '@/libs/paste/caps-lock';
+import { planPaste } from '@/libs/paste/plan';
 import {
+  normalisePasteSettings,
+  resolveImePreKey,
+  resolveUnicodeMethod,
+  type BridgeWindow
+} from '@/libs/paste/settings';
+import { PASTE_HARD_LIMIT } from '@/libs/paste/text-to-keys';
+import type { ImePreKey, SkippedChar, TargetLayout } from '@/libs/paste/types';
+import {
+  estimateProgramMs,
   PACING,
   TypingEngine,
   type EngineEvent,
   type Pacing,
+  type ProgramStep,
   type StopReason
 } from '@/libs/paste/typing-engine';
+import * as storage from '@/libs/storage';
 
 import {
   classifyClipboardError,
   decideStart,
-  estimateRunMs,
   summarizeSkipped,
   type SkippedSummary
 } from './decide.ts';
 
 /**
- * Paste controller (spec §5.4): one path for the menu row, the ⌘⇧V hotkey
- * and the manual text box. Reads the jotai store directly so the hotkey
- * (which arrives from the keyboard driver, outside React) shares it. No
- * React or antd here: toasts and the confirm dialog go through a UI bridge
+ * Paste controller (spec v1 §5.4, v2 §9): one path for the menu row, the
+ * ⌘⇧V hotkey and the manual text box. Plans the text (v1 keystrokes,
+ * Ctrl+Shift+U or the browser bridge), asks what has to be asked and runs
+ * the result as one typing-engine program. Reads the jotai store directly so
+ * the hotkey (which arrives from the keyboard driver, outside React) shares
+ * it. No React or antd here: toasts and dialogs go through a UI bridge
  * registered by the progress pill.
  */
 
@@ -78,12 +92,15 @@ export interface PasteSettingsModalState {
 
 export const pasteSettingsModalAtom = atom<PasteSettingsModalState>({ open: false });
 
-export type PasteNotice = 'notConnected' | 'noFocus' | 'empty' | 'nothingTypeable' | 'truncated';
+export type PasteNotice =
+  'notConnected' | 'noFocus' | 'empty' | 'nothingTypeable' | 'truncated' | 'noVideo';
 
-/** Implemented by the mounted React side (toasts + the large-paste confirm). */
+/** Implemented by the mounted React side (toasts, the large-paste confirm, the bridge intro). */
 export interface PasteUi {
   notify(notice: PasteNotice, params?: Record<string, string | number>): void;
   confirmLarge(count: number, seconds: number): Promise<boolean>;
+  /** The one-time explanation before the first bridge run; true when accepted. */
+  confirmBridge(seconds: number): Promise<boolean>;
 }
 
 export type DriverLike = Pick<KeyboardDriver, 'lastReport' | 'isMuted' | 'isDryRun' | 'setMuted'>;
@@ -97,19 +114,51 @@ export interface PasteControllerDeps {
   hostOS: System;
   /** The mounted physical-keyboard driver, if any (resync after an early stop). */
   getDriver(): DriverLike | null;
+  /** The target screen the bridge watches; prod: the capture video (spec v2 §7). */
+  sampler: FrameSampler;
+  /** The target's keyboard LEDs, null when unknown; prod: device.getLockState() (spec v2 §8.3). */
+  getLockState(): Promise<LockState | null>;
+  /** prod: storage, `nanokvm-usb-paste-bridge-intro` */
+  isBridgeIntroAccepted(): boolean;
+  acceptBridgeIntro(): void;
 }
 
 export type StartOutcome =
-  'started' | 'cancelled' | 'busy' | 'notConnected' | 'clipboard' | 'nothing' | 'declined';
+  | 'started'
+  | 'cancelled'
+  | 'busy'
+  | 'notConnected'
+  | 'clipboard'
+  | 'nothing'
+  | 'declined'
+  | 'noVideo';
+
+interface BridgeTarget {
+  layout: TargetLayout;
+  imeOff: ImePreKey;
+  window: BridgeWindow;
+  targetOs: TargetOs;
+}
+
+/** The ETA a dialog shows, in whole seconds. */
+function etaSeconds(steps: readonly ProgramStep[], pacing: Pacing): number {
+  return Math.ceil(estimateProgramMs(steps, pacing) / 1000);
+}
 
 export class PasteController {
   private ui: PasteUi | null = null;
   private engine: TypingEngine | null = null;
-  /** True between a trigger and the run start (clipboard read, confirm dialog). */
+  /** True between a trigger and the run start (clipboard read, dialogs, lock-state query). */
   private pending = false;
   /** The user asked for the stop (row, pill or hotkey), whatever interrupt the engine saw first. */
   private explicitCancel = false;
   private skipped: SkippedSummary[] = [];
+  private method: PasteMethod = 'direct';
+  /**
+   * Probe-cache key of the last successful probe page (spec v2 §9.3): in
+   * memory only, so a page reload probes again.
+   */
+  private probedKey: string | null = null;
 
   constructor(private readonly deps: PasteControllerDeps) {}
 
@@ -207,18 +256,23 @@ export class PasteController {
       }
 
       const settings = normalisePasteSettings(store.get(pasteSettingsAtom), this.deps.hostOS);
-      const compiled = textToKeySequence(source, {
-        layout: store.get(targetLayoutAtom),
+      const layout = store.get(targetLayoutAtom);
+      const targetOs = store.get(targetOsAtom);
+      const imePreKey = resolveImePreKey(settings.imePreKey, targetOs);
+      const plan = planPaste(source, {
+        layout,
         newline: settings.newline,
         normalizePunct: settings.normalizePunct,
         stripTrailingNewline: settings.stripTrailingNewline,
-        imePreKey: settings.imePreKey,
+        imePreKey,
+        method: resolveUnicodeMethod(settings.unicodeMethod, targetOs),
         maxChars: PASTE_HARD_LIMIT
       });
+      const { stats, skipped } = plan.kind === 'bridge' ? plan : plan.compiled;
       const pacing = PACING[settings.speed];
 
       // the clipboard read was asynchronous: serial may have dropped meanwhile
-      const decision = decideStart(compiled, store.get(serialStateAtom));
+      const decision = decideStart({ stats }, store.get(serialStateAtom));
       if (decision === 'notConnected') {
         this.notify('notConnected');
         return 'notConnected';
@@ -227,33 +281,93 @@ export class PasteController {
         this.notify('nothingTypeable');
         return 'nothing';
       }
-      if (compiled.stats.truncated) {
+
+      let steps: ProgramStep[];
+      if (plan.kind === 'bridge') {
+        // the bridge sees the target window and its check page only through the video
+        if (!this.deps.sampler.available()) {
+          this.notify('noVideo');
+          return 'noVideo';
+        }
+        steps = this.bridgeProgram(plan.text, {
+          layout,
+          imeOff: imePreKey,
+          window: settings.bridgeWindow,
+          targetOs
+        });
+        if (!this.deps.isBridgeIntroAccepted()) {
+          const accepted = await this.confirmBridge(etaSeconds(steps, pacing));
+          if (!accepted) return 'declined';
+          this.deps.acceptBridgeIntro();
+        }
+      } else {
+        steps = [{ kind: 'keys', strokes: plan.compiled.strokes }];
+      }
+
+      if (stats.truncated) {
         this.notify('truncated', { max: PASTE_HARD_LIMIT });
       }
       if (decision === 'confirm') {
-        const seconds = Math.ceil(estimateRunMs(compiled, pacing) / 1000);
-        const confirmed = await this.confirmLarge(compiled.stats.chars, seconds);
+        const confirmed = await this.confirmLarge(stats.chars, etaSeconds(steps, pacing));
         if (!confirmed) return 'declined';
-        if (store.get(serialStateAtom) !== 'connected') {
-          this.notify('notConnected');
-          return 'notConnected';
-        }
+      }
+      if (settings.fixCapsLock) {
+        steps = [...(await this.capsLockPreflight(layout)), ...steps];
+      }
+      // dialogs and the lock-state query are asynchronous as well
+      if (store.get(serialStateAtom) !== 'connected') {
+        this.notify('notConnected');
+        return 'notConnected';
       }
 
-      return this.launch(compiled, pacing);
+      return this.launch(steps, pacing, plan.kind, skipped);
     } finally {
       this.pending = false;
     }
   }
 
-  private launch(compiled: CompileResult, pacing: Pacing): StartOutcome {
+  /**
+   * The bridge program (spec v2 §4.2). Its probe page runs until a probe
+   * succeeded for this layout, window, IME-off key and target OS (§9.3).
+   */
+  private bridgeProgram(text: string, target: BridgeTarget): ProgramStep[] {
+    const probeKey = [target.layout, target.window, target.imeOff, target.targetOs].join('|');
+    return buildBridgeProgram(buildBridgeUrl(text), {
+      sampler: this.deps.sampler,
+      layout: target.layout,
+      imeOff: target.imeOff,
+      window: target.window,
+      probe: probeKey !== this.probedKey,
+      onProbeOk: () => {
+        this.probedKey = probeKey;
+      }
+    });
+  }
+
+  /**
+   * Caps Lock pre-flight (spec v2 §8.3), on every path: a toggle and a wait
+   * when the device reports Caps Lock on; nothing when the state is unknown.
+   */
+  private async capsLockPreflight(layout: TargetLayout): Promise<ProgramStep[]> {
+    const getLockState = () => this.deps.getLockState();
+    const state = await getLockState().catch(() => null);
+    return state?.caps === true ? buildCapsLockPreflight(layout, getLockState) : [];
+  }
+
+  private launch(
+    steps: ProgramStep[],
+    pacing: Pacing,
+    method: PasteMethod,
+    skipped: readonly SkippedChar[]
+  ): StartOutcome {
     const engine = this.ensureEngine();
     if (engine.state !== 'idle' || this.deps.lock.isLocked()) return 'busy';
 
-    this.skipped = summarizeSkipped(compiled.skipped);
+    this.skipped = summarizeSkipped(skipped);
+    this.method = method;
     this.explicitCancel = false;
-    // 'start' is emitted synchronously inside run(); the result arrives through the 'stop' event
-    engine.run(compiled, pacing).then(
+    // 'start' is emitted synchronously inside runProgram(); the result arrives through the 'stop' event
+    engine.runProgram(steps, pacing).then(
       (result) => {
         if (result.reason === 'lock-busy') console.warn('[paste] HID lock busy, nothing typed');
       },
@@ -280,8 +394,10 @@ export class PasteController {
         done: event.done,
         total: event.total,
         etaMs: event.etaMs,
-        skipped: this.skipped
+        skipped: this.skipped,
+        method: this.method
       };
+      if (event.phase !== undefined) state.phase = event.phase;
       store.set(pasteRunAtom, state);
       return;
     }
@@ -298,7 +414,8 @@ export class PasteController {
       total: event.total,
       etaMs: 0,
       reason: shown,
-      skipped: this.skipped
+      skipped: this.skipped,
+      method: this.method
     });
     if (reason !== 'completed') this.resyncDriver();
   }
@@ -331,6 +448,14 @@ export class PasteController {
     }
     return this.ui.confirmLarge(count, seconds);
   }
+
+  private confirmBridge(seconds: number): Promise<boolean> {
+    if (!this.ui) {
+      console.warn('[paste] no UI mounted to explain the browser bridge');
+      return Promise.resolve(false);
+    }
+    return this.ui.confirmBridge(seconds);
+  }
 }
 
 export const pasteController = new PasteController({
@@ -339,5 +464,9 @@ export const pasteController = new PasteController({
   lock: hidLock,
   readClipboard: () => navigator.clipboard.readText(),
   hostOS: getOperatingSystem(),
-  getDriver: getKeyboardDriver
+  getDriver: getKeyboardDriver,
+  sampler: createVideoSampler(() => document.getElementById('video') as HTMLVideoElement | null),
+  getLockState: () => device.getLockState(),
+  isBridgeIntroAccepted: () => storage.getPasteBridgeIntroAccepted(),
+  acceptBridgeIntro: () => storage.setPasteBridgeIntroAccepted(true)
 });

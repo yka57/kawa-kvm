@@ -1,3 +1,4 @@
+import { FrameParser, type ParsedFrame } from './frame-parser';
 import { isDisconnectError, raceWithTimeout } from './utils';
 
 type WebSerialPort = {
@@ -13,9 +14,10 @@ type Options = {
   onDisconnect?: () => void;
 };
 
+export type FrameListener = (frame: ParsedFrame) => void;
+
 export class SerialPort {
   readonly SERIAL_BAUD_RATE = 57600;
-  readonly READ_TIMEOUT = 500;
   readonly CLEANUP_TIMEOUT = 1000;
 
   private instance: WebSerialPort | null = null;
@@ -23,6 +25,8 @@ export class SerialPort {
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private onDisconnect?: () => void;
   private disconnectListeners = new Set<() => void>();
+  private readonly parser = new FrameParser();
+  private readonly frameListeners = new Set<FrameListener>();
 
   private disconnectHandler = (event: Event) => {
     if (event.target === this.instance) {
@@ -52,12 +56,26 @@ export class SerialPort {
 
     this.reader = this.instance.readable.getReader();
     this.writer = this.instance.writable.getWriter();
+    this.parser.reset();
 
     if (options.onDisconnect) {
       this.onDisconnect = options.onDisconnect;
     }
 
     navigator.serial.addEventListener('disconnect', this.disconnectHandler);
+    void this.readLoop(this.reader);
+  }
+
+  /**
+   * Subscribes to the frames the device sends back (every command is
+   * answered, and the chip reports LED changes on its own). Returns the
+   * unsubscribe function; a throwing listener does not affect the others.
+   */
+  onFrame(listener: FrameListener): () => void {
+    this.frameListeners.add(listener);
+    return () => {
+      this.frameListeners.delete(listener);
+    };
   }
 
   /**
@@ -133,36 +151,39 @@ export class SerialPort {
     }
   }
 
-  async read(minSize: number, delayAfterRead: number = 0): Promise<number[]> {
-    if (!this.reader) {
-      throw new Error('Serial port not initialized');
-    }
-
-    const result: number[] = [];
-    const startTime = Date.now();
-
+  /**
+   * The port's only reader while it is open (spec v2 §8.2): one read() at a
+   * time, every chunk through the frame parser to the onFrame listeners.
+   * Unread replies would otherwise pile up in the stream. Ends when the
+   * stream is done (close() cancels the reader) or a read fails.
+   */
+  private async readLoop(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
     try {
-      while (result.length < minSize) {
-        const remainingTime = this.READ_TIMEOUT - (Date.now() - startTime);
-        if (remainingTime <= 0) return [];
-
-        const response = await raceWithTimeout(this.reader.read(), remainingTime);
-        if (!response || response.done || !response.value) break;
-
-        result.push(...Array.from(response.value));
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done || reader !== this.reader) return;
+        if (value) this.dispatch(this.parser.push(value));
       }
-
-      if (delayAfterRead > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delayAfterRead));
-      }
-
-      return result;
     } catch (err) {
+      // releasing or replacing a reader rejects its pending read: not an error of this port
+      if (reader !== this.reader) return;
       if (isDisconnectError(err)) {
         this.handleDisconnect();
-        throw new Error('Device disconnected');
+        return;
       }
-      throw err;
+      console.error('Serial read failed:', err);
+    }
+  }
+
+  private dispatch(frames: ParsedFrame[]): void {
+    for (const frame of frames) {
+      for (const listener of Array.from(this.frameListeners)) {
+        try {
+          listener(frame);
+        } catch (err) {
+          console.error('Serial frame listener failed:', err);
+        }
+      }
     }
   }
 
@@ -189,6 +210,7 @@ export class SerialPort {
         this.instance = null;
       }
 
+      this.parser.reset();
       navigator.serial.removeEventListener('disconnect', this.disconnectHandler);
     } catch (err) {
       console.error('Error during close:', err);

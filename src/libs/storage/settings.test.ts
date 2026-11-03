@@ -244,6 +244,36 @@ describe('debug HID flag', () => {
   });
 });
 
+describe('paste bridge intro flag', () => {
+  it("is accepted only for the literal '1'; the setter removes the key when cleared", () => {
+    expect(storage.getPasteBridgeIntroAccepted()).toBe(false);
+    store.setItem('nanokvm-usb-paste-bridge-intro', 'true');
+    expect(storage.getPasteBridgeIntroAccepted()).toBe(false);
+    storage.setPasteBridgeIntroAccepted(true);
+    expect(storage.getPasteBridgeIntroAccepted()).toBe(true);
+    expect(store.getItem('nanokvm-usb-paste-bridge-intro')).toBe('1');
+    storage.setPasteBridgeIntroAccepted(false);
+    expect(storage.getPasteBridgeIntroAccepted()).toBe(false);
+    expect(store.getItem('nanokvm-usb-paste-bridge-intro')).toBeNull();
+  });
+
+  it('never throws without localStorage or when storage access throws', () => {
+    vi.unstubAllGlobals();
+    expect(storage.getPasteBridgeIntroAccepted()).toBe(false);
+    expect(() => storage.setPasteBridgeIntroAccepted(true)).not.toThrow();
+
+    const fail = () => {
+      throw new Error('SecurityError');
+    };
+    vi.stubGlobal('localStorage', { getItem: fail, setItem: fail, removeItem: fail });
+    expect(storage.getPasteBridgeIntroAccepted()).toBe(false);
+    expect(() => {
+      storage.setPasteBridgeIntroAccepted(true);
+      storage.setPasteBridgeIntroAccepted(false);
+    }).not.toThrow();
+  });
+});
+
 describe('robustness', () => {
   function expectDefaults() {
     expect(storage.getTargetOs()).toBe('windows');

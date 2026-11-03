@@ -15,7 +15,8 @@ export interface KeyCombo {
 /** Printable character → chord. Every key is a single character. */
 export type LayoutTable = Record<string, KeyCombo>;
 
-export type StrokeTag = 'char' | 'enter' | 'tab' | 'ime-pre';
+/** `unicode`: a Ctrl+Shift+U entry (spec §5); `chord`: a bridge control key such as Ctrl+L (§4.2). */
+export type StrokeTag = 'char' | 'enter' | 'tab' | 'ime-pre' | 'unicode' | 'chord';
 
 /** One press/release pair the typing engine executes. */
 export interface KeyStroke {
@@ -23,13 +24,21 @@ export interface KeyStroke {
   mod: number;
   /** HID usage of the pressed key (0x04…). */
   key: number;
-  /** Index of the originating grapheme in the segmented text; -1 when there is none (ime-pre). */
+  /** Index of the originating grapheme in the segmented text; -1 when there is none (ime-pre, bridge keys). */
   src: number;
   tag: StrokeTag;
+  /** Extra pause after this stroke's gap, for the target to settle (IME switch, input method, clipboard). */
+  afterMs?: number;
+  /**
+   * Atomic group id: the typing engine defers a cancel until the last stroke
+   * of the run of consecutive strokes sharing this id has been released.
+   */
+  group?: number;
 }
 
 export type NewlineMode = 'enter' | 'shift-enter';
-export type ImePreKey = 'none' | 'NonConvert';
+/** The RESOLVED IME pre-key the compilers send (settings may also say 'auto', see resolveImePreKey). */
+export type ImePreKey = 'none' | 'NonConvert' | 'Lang2';
 
 export interface CompileOptions {
   layout: TargetLayout;

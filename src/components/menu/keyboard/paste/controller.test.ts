@@ -3,11 +3,28 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { serialStateAtom } from '@/jotai/device';
 import { IDLE_PASTE_RUN, pasteRunAtom, pasteSettingsAtom } from '@/jotai/paste';
-import { targetLayoutAtom } from '@/jotai/target';
+import { targetLayoutAtom, targetOsAtom, type TargetOs } from '@/jotai/target';
+import type { LockState } from '@/libs/device';
 import { HidLock } from '@/libs/keyboard/hid-lock';
 import { KeycodeMap, ModifierBits } from '@/libs/keyboard/keymap';
+import { FRAME_H, FRAME_W, type Frame, type FrameSampler } from '@/libs/media/frame-probe';
+import {
+  BRIDGE_PROBE_URL,
+  BRIDGE_URL_PREFIX,
+  buildBridgeProgram,
+  buildBridgeUrl
+} from '@/libs/paste/bridge';
+import { CAPS_LOCK_TIMEOUT_MS } from '@/libs/paste/caps-lock';
+import { getTable } from '@/libs/paste/layouts';
 import { PASTE_HARD_LIMIT, PASTE_SOFT_LIMIT } from '@/libs/paste/text-to-keys';
-import { TypingEngine, ZERO_REPORT } from '@/libs/paste/typing-engine';
+import type { TargetLayout } from '@/libs/paste/types';
+import {
+  estimateProgramMs,
+  PACING,
+  TypingEngine,
+  ZERO_REPORT,
+  type PastePhase
+} from '@/libs/paste/typing-engine';
 import { FakeClock, FakeSink, flushMicrotasks } from '@/test/fakes';
 
 import {
@@ -20,13 +37,99 @@ import {
 
 const ZERO = [...ZERO_REPORT];
 const press = (key: number, mod = 0): number[] => [mod, 0, key, 0, 0, 0, 0, 0];
+const CTRL = ModifierBits.LeftCtrl;
+const SHIFT = ModifierBits.LeftShift;
+
+type Screen = 'desktop' | 'window' | 'magenta' | 'lime' | 'red';
+
+function frame(rgb: [number, number, number]): Frame {
+  const data = new Uint8ClampedArray(FRAME_W * FRAME_H * 4);
+  for (let i = 0; i < FRAME_W * FRAME_H; i++) data.set([...rgb, 255], i * 4);
+  return { w: FRAME_W, h: FRAME_H, data };
+}
+
+// limited-range HDMI colours, as the capture device delivers them
+const FRAMES: Record<Screen, Frame> = {
+  desktop: frame([200, 200, 200]),
+  window: frame([40, 40, 40]),
+  magenta: frame([235, 16, 235]),
+  lime: frame([16, 235, 16]),
+  red: frame([235, 16, 16])
+};
+
+interface BrowserScript {
+  opensWindow: boolean;
+  loadsProbe: boolean;
+  /** What a typed bridge URL shows: its page verified (lime) or not (red). */
+  payload: 'lime' | 'red';
+  closesWindow: boolean;
+}
+
+const WORKING_BROWSER: BrowserScript = {
+  opensWindow: true,
+  loadsProbe: true,
+  payload: 'lime',
+  closesWindow: true
+};
+
+/**
+ * The target browser as the bridge sees it through the video: the three
+ * open-window chords open a window, Ctrl+L starts a new address, Enter loads
+ * it, Ctrl+W closes the window. Typed characters are decoded with the target
+ * layout table.
+ */
+class FakeBrowser {
+  shown: Screen = 'desktop';
+  /** Every address loaded with Enter, in order. */
+  readonly loads: string[] = [];
+  script: BrowserScript = WORKING_BROWSER;
+  private address = '';
+  private chars = new Map<string, string>();
+
+  setLayout(layout: TargetLayout): void {
+    this.chars = new Map(
+      Object.entries(getTable(layout)).map(([char, combo]) => [
+        `${combo.shift ? SHIFT : 0}:${KeycodeMap[combo.key]}`,
+        char
+      ])
+    );
+  }
+
+  onReport([mod, , key]: number[]): void {
+    if (key === 0) return;
+    const opensWindow =
+      (mod === (CTRL | SHIFT) && (key === KeycodeMap.KeyN || key === KeycodeMap.KeyP)) ||
+      (mod === CTRL && key === KeycodeMap.KeyN);
+    if (opensWindow) {
+      if (this.script.opensWindow) this.shown = 'window';
+    } else if (mod === CTRL && key === KeycodeMap.KeyL) {
+      this.address = '';
+    } else if (mod === CTRL && key === KeycodeMap.KeyW) {
+      if (this.script.closesWindow) this.shown = 'desktop';
+    } else if (mod === 0 && key === KeycodeMap.Enter) {
+      this.loads.push(this.address);
+      if (this.address === BRIDGE_PROBE_URL && this.script.loadsProbe) this.shown = 'magenta';
+      if (this.address.startsWith(BRIDGE_URL_PREFIX)) this.shown = this.script.payload;
+    } else {
+      this.address += this.chars.get(`${mod}:${key}`) ?? '';
+    }
+  }
+}
 
 interface HarnessOptions {
   clipboard?: string | (() => Promise<string>);
   serial?: 'connected' | 'disconnected';
   settings?: Record<string, unknown>;
   layout?: 'us' | 'jis';
+  targetOs?: TargetOs;
   driver?: DriverLike | null;
+  /** The capture video shows the target (default true). */
+  video?: boolean;
+  browser?: Partial<BrowserScript>;
+  /** Successive getLockState() answers, the last one repeating (default: unknown). */
+  lockStates?: Array<LockState | null>;
+  /** The one-time bridge explanation was accepted earlier (default false: a fresh profile). */
+  introAccepted?: boolean;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -34,13 +137,21 @@ function makeHarness(options: HarnessOptions = {}) {
   store.set(serialStateAtom, options.serial ?? 'connected');
   store.set(pasteSettingsAtom, options.settings ?? null);
   store.set(targetLayoutAtom, options.layout ?? 'us');
+  // Linux: the automatic IME pre-key resolves to none, so the sequences below are the bare text
+  store.set(targetOsAtom, options.targetOs ?? 'linux');
 
   const clock = new FakeClock();
   const sink = new FakeSink();
   const lock = new HidLock();
   const target = new EventTarget();
+  const browser = new FakeBrowser();
+  browser.setLayout(options.layout ?? 'us');
+  browser.script = { ...WORKING_BROWSER, ...options.browser };
   const engine = new TypingEngine({
-    send: sink.send,
+    send: (report) => {
+      browser.onReport(report);
+      return sink.send(report);
+    },
     lock,
     clock,
     interruptTarget: target,
@@ -49,7 +160,9 @@ function makeHarness(options: HarnessOptions = {}) {
 
   const notices: Array<{ notice: string; params?: Record<string, string | number> }> = [];
   const confirms: Array<[number, number]> = [];
+  const bridgeConfirms: number[] = [];
   let confirmAnswer = true;
+  let bridgeAnswer = true;
   const ui: PasteUi = {
     notify: (notice, params) => {
       notices.push({ notice, params });
@@ -57,8 +170,23 @@ function makeHarness(options: HarnessOptions = {}) {
     confirmLarge: (count, seconds) => {
       confirms.push([count, seconds]);
       return Promise.resolve(confirmAnswer);
+    },
+    confirmBridge: (seconds) => {
+      bridgeConfirms.push(seconds);
+      return Promise.resolve(bridgeAnswer);
     }
   };
+
+  let video = options.video ?? true;
+  const sampler: FrameSampler = {
+    available: () => video,
+    sample: () => (video ? FRAMES[browser.shown] : null)
+  };
+  const lockStates = [...(options.lockStates ?? [null])];
+  const getLockState = vi.fn(() =>
+    Promise.resolve((lockStates.length > 1 ? lockStates.shift() : lockStates[0]) ?? null)
+  );
+  let introAccepted = options.introAccepted ?? false;
 
   const clipboard = options.clipboard ?? '';
   const readClipboard = vi.fn(
@@ -70,7 +198,13 @@ function makeHarness(options: HarnessOptions = {}) {
     lock,
     readClipboard,
     hostOS: 'macOS',
-    getDriver: () => options.driver ?? null
+    getDriver: () => options.driver ?? null,
+    sampler,
+    getLockState,
+    isBridgeIntroAccepted: () => introAccepted,
+    acceptBridgeIntro: () => {
+      introAccepted = true;
+    }
   });
   controller.setUi(ui);
 
@@ -84,10 +218,21 @@ function makeHarness(options: HarnessOptions = {}) {
     controller,
     notices,
     confirms,
+    bridgeConfirms,
     readClipboard,
+    browser,
+    sampler,
+    getLockState,
     setConfirmAnswer: (answer: boolean) => {
       confirmAnswer = answer;
     },
+    setBridgeAnswer: (answer: boolean) => {
+      bridgeAnswer = answer;
+    },
+    setVideo: (on: boolean) => {
+      video = on;
+    },
+    introAccepted: () => introAccepted,
     run: () => store.get(pasteRunAtom)
   };
 }
@@ -140,7 +285,7 @@ describe('PasteController', () => {
   });
 
   it('nothing typeable: notice, no lock, nothing on the wire', async () => {
-    const h = makeHarness({ clipboard: '日本語のテキスト' });
+    const h = makeHarness({ clipboard: '日本語のテキスト', settings: { unicodeMethod: 'skip' } });
     await expect(h.controller.startFromRow()).resolves.toBe('nothing');
     expect(h.notices.map((n) => n.notice)).toEqual(['nothingTypeable']);
     expect(h.lock.isLocked()).toBe(false);
@@ -152,7 +297,14 @@ describe('PasteController', () => {
     const h = makeHarness({ clipboard: 'ab' });
     await expect(h.controller.startFromRow()).resolves.toBe('started');
     expect(h.readClipboard).toHaveBeenCalledTimes(1);
-    expect(h.run()).toEqual({ status: 'running', done: 0, total: 2, etaMs: 80, skipped: [] });
+    expect(h.run()).toEqual({
+      status: 'running',
+      done: 0,
+      total: 2,
+      etaMs: 80,
+      skipped: [],
+      method: 'direct'
+    });
     expect(h.lock.owner).toBe('paste');
 
     await finish(h.clock, 2);
@@ -170,7 +322,8 @@ describe('PasteController', () => {
       total: 2,
       etaMs: 0,
       reason: 'completed',
-      skipped: []
+      skipped: [],
+      method: 'direct'
     });
     expect(h.lock.isLocked()).toBe(false);
     expect(h.engine.state).toBe('idle');
@@ -194,8 +347,34 @@ describe('PasteController', () => {
     expect(us.sink.reports[1]).toEqual(press(KeycodeMap.Digit2, ModifierBits.LeftShift));
   });
 
+  it('sends the IME-off key (LANG2) first on a Windows target by default, then settles', async () => {
+    const h = makeHarness({ clipboard: 'a', targetOs: 'windows' });
+    await h.controller.startFromRow();
+    // LANG2 hold 20 + gap 20 + IME settle 150, then 'a' hold 20 + gap 20
+    expect(h.run()).toMatchObject({ status: 'running', total: 2, etaMs: 230 });
+    await finish(h.clock, 7);
+    expect(h.sink.reports).toEqual([
+      ZERO,
+      press(KeycodeMap.Lang2),
+      ZERO,
+      press(KeycodeMap.KeyA),
+      ZERO,
+      ZERO
+    ]);
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', done: 2 });
+
+    const none = makeHarness({
+      clipboard: 'a',
+      targetOs: 'windows',
+      settings: { version: 2, imePreKey: 'none' }
+    });
+    await none.controller.startFromRow();
+    await finish(none.clock, 1);
+    expect(none.sink.reports).toEqual([ZERO, press(KeycodeMap.KeyA), ZERO, ZERO]);
+  });
+
   it('reports skipped characters (unique, counted) from the start of the run', async () => {
-    const h = makeHarness({ clipboard: 'aあbあい' });
+    const h = makeHarness({ clipboard: 'aあbあい', settings: { unicodeMethod: 'skip' } });
     await h.controller.startFromRow();
     const skipped = [
       { char: 'あ', count: 2 },
@@ -344,7 +523,7 @@ describe('PasteController', () => {
   });
 
   it('startFromText shares the path without touching the clipboard', async () => {
-    const h = makeHarness({ clipboard: 'clipboard' });
+    const h = makeHarness({ clipboard: 'clipboard', settings: { unicodeMethod: 'skip' } });
     await expect(h.controller.startFromText('hi')).resolves.toBe('started');
     expect(h.readClipboard).not.toHaveBeenCalled();
     await finish(h.clock, 2);
@@ -386,19 +565,332 @@ describe('PasteController', () => {
       lock: h.lock,
       readClipboard: h.readClipboard,
       hostOS: 'macOS',
-      getDriver: () => null
+      getDriver: () => null,
+      sampler: h.sampler,
+      getLockState: h.getLockState,
+      isBridgeIntroAccepted: () => true,
+      acceptBridgeIntro: () => {}
     });
     await expect(controller.startFromRow()).resolves.toBe('declined');
     expect(h.sink.reports).toEqual([]);
     expect(warn).toHaveBeenCalled();
 
     // the registered UI can be unregistered again
-    const off = controller.setUi({ notify: () => {}, confirmLarge: () => Promise.resolve(true) });
+    const off = controller.setUi({
+      notify: () => {},
+      confirmLarge: () => Promise.resolve(true),
+      confirmBridge: () => Promise.resolve(true)
+    });
     off();
     h.store.set(serialStateAtom, 'disconnected');
     warn.mockClear();
     await expect(controller.startFromRow()).resolves.toBe('notConnected');
     expect(warn).toHaveBeenCalledWith('[paste]', 'notConnected', '');
+  });
+});
+
+const CAPS_ON: LockState = { num: true, caps: true, scroll: false, version: 0x38 };
+const CAPS_OFF: LockState = { ...CAPS_ON, caps: false };
+
+type Harness = ReturnType<typeof makeHarness>;
+
+/** Advances the clock until the run is over (a bridge run takes seconds). */
+async function settle(h: Harness): Promise<void> {
+  await flushMicrotasks();
+  for (let i = 0; i < 300 && h.engine.state !== 'idle'; i++) await h.clock.advanceAsync(100);
+}
+
+/** The ETA the dialogs show for a first (probing) bridge run with the default settings. */
+function firstBridgeSeconds(text: string, sampler: FrameSampler): number {
+  const program = buildBridgeProgram(buildBridgeUrl(text), {
+    sampler,
+    layout: 'us',
+    imeOff: 'Lang2',
+    window: 'chromium-private',
+    probe: true,
+    onProbeOk: () => undefined
+  });
+  return Math.ceil(estimateProgramMs(program, PACING.normal) / 1000);
+}
+
+/** The first key press on the wire, a few milliseconds into the run. */
+async function firstPress(h: Harness): Promise<number[] | undefined> {
+  await h.clock.advanceAsync(5);
+  return h.sink.reports.find((report) => report[2] !== 0);
+}
+
+describe('PasteController: methods, bridge and Caps Lock (spec v2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('Japanese on a Windows target goes through the browser bridge, phase by phase', async () => {
+    const h = makeHarness({
+      clipboard: '日本語',
+      targetOs: 'windows',
+      settings: { speed: 'fast' }
+    });
+    const phases: PastePhase[] = [];
+    h.store.sub(pasteRunAtom, () => {
+      const { phase } = h.run();
+      if (phase !== undefined && phase !== phases[phases.length - 1]) phases.push(phase);
+    });
+
+    await expect(h.controller.startFromRow()).resolves.toBe('started');
+    expect(h.run()).toMatchObject({ status: 'running', method: 'bridge', skipped: [] });
+    await settle(h);
+
+    expect(h.browser.loads).toEqual([BRIDGE_PROBE_URL, buildBridgeUrl('日本語')]);
+    expect(h.sink.reports[1]).toEqual(press(KeycodeMap.KeyN, CTRL | SHIFT));
+    expect(h.sink.reports.slice(-3)).toEqual([press(KeycodeMap.KeyV, CTRL), ZERO, ZERO]);
+    expect(phases).toEqual(['window', 'probe', 'type', 'verify', 'copy', 'close', 'paste']);
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', method: 'bridge' });
+    expect(h.run().phase).toBeUndefined();
+  });
+
+  it('Japanese on a Linux target is typed with Ctrl+Shift+U, the hex digits and Space', async () => {
+    const h = makeHarness({ clipboard: 'aあ' });
+    await h.controller.startFromRow();
+    expect(h.run()).toMatchObject({ status: 'running', method: 'unicode' });
+    await settle(h);
+    expect(h.sink.reports.filter((report) => report[2] !== 0)).toEqual([
+      press(KeycodeMap.KeyA),
+      press(KeycodeMap.KeyU, CTRL | SHIFT),
+      press(KeycodeMap.Digit3),
+      press(KeycodeMap.Digit0),
+      press(KeycodeMap.Digit4),
+      press(KeycodeMap.Digit2),
+      press(KeycodeMap.Space)
+    ]);
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', skipped: [] });
+  });
+
+  it('resolves the method from the setting and the target OS', async () => {
+    const start = async (options: HarnessOptions) => {
+      const h = makeHarness({ clipboard: 'aあ', ...options });
+      await expect(h.controller.startFromRow()).resolves.toBe('started');
+      const { method, skipped } = h.run();
+      const first = await firstPress(h);
+      h.controller.cancel();
+      await settle(h);
+      return { method, skipped, first };
+    };
+    const openWindow = press(KeycodeMap.KeyN, CTRL | SHIFT);
+    const skippedA = [{ char: 'あ', count: 1 }];
+
+    // auto: the bridge on Windows, Ctrl+Shift+U on Linux, v1 skipping on macOS
+    expect(await start({ targetOs: 'windows' })).toEqual({
+      method: 'bridge',
+      skipped: [],
+      first: openWindow
+    });
+    expect(await start({ targetOs: 'linux' })).toMatchObject({ method: 'unicode', skipped: [] });
+    expect(await start({ targetOs: 'macos' })).toEqual({
+      method: 'direct',
+      skipped: skippedA,
+      first: press(KeycodeMap.KeyA)
+    });
+    // explicit choices; both Unicode methods use Ctrl chords, which a macOS target ignores
+    const explicit = (targetOs: TargetOs, unicodeMethod: string) =>
+      start({ targetOs, settings: { unicodeMethod } });
+    expect(await explicit('linux', 'bridge')).toMatchObject({
+      method: 'bridge',
+      first: openWindow
+    });
+    expect(await explicit('windows', 'ctrl-shift-u')).toMatchObject({
+      method: 'unicode',
+      first: press(KeycodeMap.Lang2)
+    });
+    expect(await explicit('windows', 'skip')).toEqual({
+      method: 'direct',
+      skipped: skippedA,
+      first: press(KeycodeMap.Lang2)
+    });
+    expect(await explicit('macos', 'bridge')).toMatchObject({
+      method: 'direct',
+      skipped: skippedA
+    });
+  });
+
+  it('without video the bridge is refused: a notice, no dialog, nothing sent', async () => {
+    const h = makeHarness({ clipboard: 'あ', targetOs: 'windows', video: false });
+    await expect(h.controller.startFromRow()).resolves.toBe('noVideo');
+    expect(h.notices).toEqual([{ notice: 'noVideo', params: undefined }]);
+    expect(h.bridgeConfirms).toEqual([]);
+    expect(h.getLockState).not.toHaveBeenCalled();
+    expect(h.sink.reports).toEqual([]);
+    expect(h.lock.isLocked()).toBe(false);
+    expect(h.run()).toEqual(IDLE_PASTE_RUN);
+
+    // the other paths do not need the video
+    await expect(h.controller.startFromText('abc')).resolves.toBe('started');
+    await settle(h);
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', method: 'direct' });
+  });
+
+  it('explains the bridge with its ETA before the first run only; declining sends nothing', async () => {
+    const h = makeHarness({ clipboard: 'あ', targetOs: 'windows' });
+    const seconds = firstBridgeSeconds('あ', h.sampler);
+
+    h.setBridgeAnswer(false);
+    await expect(h.controller.startFromRow()).resolves.toBe('declined');
+    expect(h.bridgeConfirms).toEqual([seconds]);
+    expect(h.introAccepted()).toBe(false);
+    expect(h.sink.reports).toEqual([]);
+    expect(h.lock.isLocked()).toBe(false);
+
+    h.setBridgeAnswer(true);
+    await expect(h.controller.startFromRow()).resolves.toBe('started');
+    expect(h.introAccepted()).toBe(true);
+    h.controller.cancel();
+    await settle(h);
+
+    await expect(h.controller.startFromRow()).resolves.toBe('started');
+    expect(h.bridgeConfirms).toEqual([seconds, seconds]);
+  });
+
+  it('a large bridge paste explains the bridge, then confirms the size, both with the program ETA', async () => {
+    const text = 'あ'.repeat(PASTE_SOFT_LIMIT + 1);
+    const h = makeHarness({ clipboard: text, targetOs: 'windows' });
+    h.setConfirmAnswer(false);
+    await expect(h.controller.startFromRow()).resolves.toBe('declined');
+
+    const seconds = firstBridgeSeconds(text, h.sampler);
+    expect(h.bridgeConfirms).toEqual([seconds]);
+    expect(h.confirms).toEqual([[PASTE_SOFT_LIMIT + 1, seconds]]);
+    expect(h.sink.reports).toEqual([]);
+  });
+
+  it('a bridge that sees no new window stops before any URL is typed', async () => {
+    const h = makeHarness({
+      clipboard: 'あ',
+      targetOs: 'windows',
+      browser: { opensWindow: false },
+      introAccepted: true
+    });
+    await h.controller.startFromRow();
+    await settle(h);
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'bridge-no-window', method: 'bridge' });
+    expect(h.sink.reports).toEqual([ZERO, press(KeycodeMap.KeyN, CTRL | SHIFT), ZERO, ZERO]);
+    expect(h.browser.loads).toEqual([]);
+  });
+
+  it('probes until a probe succeeded for the layout, window, IME-off key and target OS', async () => {
+    const h = makeHarness({ clipboard: 'あ', targetOs: 'windows', introAccepted: true });
+    const probes = () => h.browser.loads.filter((url) => url === BRIDGE_PROBE_URL).length;
+    const paste = async (settings: Record<string, unknown> = {}) => {
+      h.store.set(pasteSettingsAtom, { version: 2, speed: 'fast', ...settings });
+      await expect(h.controller.startFromRow()).resolves.toBe('started');
+      await settle(h);
+      return h.run().reason;
+    };
+
+    expect(await paste()).toBe('completed');
+    expect(probes()).toBe(1);
+    expect(await paste()).toBe('completed');
+    expect(probes()).toBe(1);
+
+    expect(await paste({ bridgeWindow: 'firefox-private' })).toBe('completed');
+    expect(probes()).toBe(2);
+    expect(await paste({ imePreKey: 'NonConvert' })).toBe('completed');
+    expect(probes()).toBe(3);
+    h.store.set(targetLayoutAtom, 'jis');
+    h.browser.setLayout('jis');
+    expect(await paste()).toBe('completed');
+    expect(probes()).toBe(4);
+    h.store.set(targetOsAtom, 'linux');
+    expect(await paste({ unicodeMethod: 'bridge', imePreKey: 'Lang2' })).toBe('completed');
+    expect(probes()).toBe(5);
+
+    // a failed probe is not remembered (the user closes the window it left open)
+    h.browser.script = { ...WORKING_BROWSER, loadsProbe: false };
+    expect(await paste({ unicodeMethod: 'bridge', bridgeWindow: 'new-window' })).toBe(
+      'bridge-probe-failed'
+    );
+    expect(probes()).toBe(6);
+    h.browser.shown = 'desktop';
+    h.browser.script = WORKING_BROWSER;
+    expect(await paste({ unicodeMethod: 'bridge', bridgeWindow: 'new-window' })).toBe('completed');
+    expect(probes()).toBe(7);
+    expect(await paste({ unicodeMethod: 'bridge', bridgeWindow: 'new-window' })).toBe('completed');
+    expect(probes()).toBe(7);
+  });
+
+  it('turns Caps Lock off first: Shift+CapsLock on JIS, a bare CapsLock on US', async () => {
+    for (const [layout, mod] of [
+      ['jis', SHIFT],
+      ['us', 0]
+    ] as const) {
+      const h = makeHarness({ clipboard: 'a', layout, lockStates: [CAPS_ON, CAPS_ON, CAPS_OFF] });
+      await expect(h.controller.startFromRow()).resolves.toBe('started');
+      await settle(h);
+      expect(h.sink.reports).toEqual([
+        ZERO,
+        press(KeycodeMap.CapsLock, mod),
+        ZERO,
+        press(KeycodeMap.KeyA),
+        ZERO,
+        ZERO
+      ]);
+      // the query before the run, then polls until the device reports Caps Lock off
+      expect(h.getLockState).toHaveBeenCalledTimes(3);
+      expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', done: 2, total: 2 });
+    }
+  });
+
+  it('runs the Caps Lock pre-flight before the bridge as well', async () => {
+    const h = makeHarness({
+      clipboard: 'あ',
+      targetOs: 'windows',
+      layout: 'jis',
+      lockStates: [CAPS_ON, CAPS_OFF],
+      settings: { speed: 'fast' },
+      introAccepted: true
+    });
+    await h.controller.startFromRow();
+    await settle(h);
+    expect(h.sink.reports.filter((report) => report[2] !== 0).slice(0, 2)).toEqual([
+      press(KeycodeMap.CapsLock, SHIFT),
+      press(KeycodeMap.KeyN, CTRL | SHIFT)
+    ]);
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', method: 'bridge' });
+  });
+
+  it('stops with caps-lock when Caps Lock is still on after the timeout; nothing else is typed', async () => {
+    const h = makeHarness({ clipboard: 'abc', lockStates: [CAPS_ON] });
+    await h.controller.startFromRow();
+    await flushMicrotasks();
+    await h.clock.advanceAsync(CAPS_LOCK_TIMEOUT_MS - 100);
+    expect(h.run().status).toBe('running');
+    await h.clock.advanceAsync(200);
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'caps-lock', done: 1, total: 4 });
+    expect(h.sink.reports).toEqual([ZERO, press(KeycodeMap.CapsLock), ZERO, ZERO]);
+  });
+
+  it('no pre-flight when the lock state is unknown, the query fails or the setting is off', async () => {
+    const plain = [ZERO, press(KeycodeMap.KeyA), ZERO, ZERO];
+
+    const unknown = makeHarness({ clipboard: 'a', lockStates: [null] });
+    await unknown.controller.startFromRow();
+    await settle(unknown);
+    expect(unknown.sink.reports).toEqual(plain);
+    expect(unknown.getLockState).toHaveBeenCalledTimes(1);
+
+    const failing = makeHarness({ clipboard: 'a', lockStates: [CAPS_ON] });
+    failing.getLockState.mockRejectedValueOnce(new Error('no reply'));
+    await expect(failing.controller.startFromRow()).resolves.toBe('started');
+    await settle(failing);
+    expect(failing.sink.reports).toEqual(plain);
+
+    const off = makeHarness({
+      clipboard: 'a',
+      lockStates: [CAPS_ON],
+      settings: { fixCapsLock: false }
+    });
+    await off.controller.startFromRow();
+    await settle(off);
+    expect(off.sink.reports).toEqual(plain);
+    expect(off.getLockState).not.toHaveBeenCalled();
   });
 });
 
