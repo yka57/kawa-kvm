@@ -420,9 +420,10 @@ export class TypingEngine {
     for (;;) {
       const verdict = await this.check(step, deadline - clock.now());
       if (verdict !== 'pending' || this.stopReason !== null) return verdict;
-      const remaining = deadline - clock.now();
-      if (remaining <= 0) return 'pending';
-      await this.sleep(Math.min(intervalMs, remaining));
+      // checks stay a full interval apart: a short last interval would let the
+      // still-screen check compare two samples of the same video frame
+      if (deadline - clock.now() < intervalMs) return 'pending';
+      await this.sleep(intervalMs);
       if (this.stopReason !== null) return 'pending';
     }
   }

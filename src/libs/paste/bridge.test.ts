@@ -645,6 +645,14 @@ describe('bridge runs against a scripted target screen', () => {
     expect(run.reports.every((report) => report.every((byte) => byte === 0))).toBe(true);
   });
 
+  it('a slow video (5 fps) never passes as still: no check compares a frame with itself at the deadline', async () => {
+    // 2500 ms is not a multiple of 300 ms: a short last poll at 2500 would see the
+    // same 200 ms frame as the poll at 2400 and call the moving screen still
+    const run = await runBridge({ ...WORKS, before: (ms) => noise(Math.floor(ms / 200)) });
+    expect(run.result).toMatchObject({ reason: 'bridge-busy-screen', typedStrokes: 0 });
+    expect(run.keys).toEqual([]);
+  });
+
   it('a screen that settles: the chord follows two still samples, then the run completes', async () => {
     // scrolling until 1 s; the samples at 1200 and 1500 ms are the first still pair
     const run = await runBridge({
