@@ -6,6 +6,7 @@ import {
   createVideoSampler,
   FRAME_H,
   FRAME_W,
+  SCREEN_STILL_MAX,
   sentinelFraction,
   sentinelGone,
   sentinelPresent,
@@ -38,15 +39,41 @@ describe('classifyPixel', () => {
     expect(classifyPixel(16, 235, 16)).toBe('lime');
     expect(classifyPixel(255, 0, 0)).toBe('red');
     expect(classifyPixel(235, 16, 16)).toBe('red');
+    expect(classifyPixel(0, 0, 255)).toBe('blue');
+    expect(classifyPixel(16, 16, 235)).toBe('blue');
   });
 
   it('tolerates compression drift at the documented bounds', () => {
     expect(classifyPixel(150, 110, 150)).toBe('magenta');
     expect(classifyPixel(110, 150, 110)).toBe('lime');
     expect(classifyPixel(150, 90, 90)).toBe('red');
+    expect(classifyPixel(90, 90, 150)).toBe('blue');
     expect(classifyPixel(149, 110, 150)).toBeNull();
     expect(classifyPixel(111, 150, 110)).toBeNull();
     expect(classifyPixel(150, 91, 90)).toBeNull();
+    expect(classifyPixel(91, 90, 150)).toBeNull();
+    expect(classifyPixel(90, 91, 150)).toBeNull();
+    expect(classifyPixel(90, 90, 149)).toBeNull();
+  });
+
+  it('uses ranges that never overlap, so the order of the checks does not matter', () => {
+    // the documented bounds of spec v2 §7 and §14.4; the edge cases above pin the code to them
+    const ranges = [
+      (r: number, g: number, b: number) => r >= 150 && b >= 150 && g <= 110, // magenta
+      (r: number, g: number, b: number) => g >= 150 && r <= 110 && b <= 110, // lime
+      (r: number, g: number, b: number) => r >= 150 && g <= 90 && b <= 90, // red
+      (r: number, g: number, b: number) => b >= 150 && r <= 90 && g <= 90 // blue
+    ];
+    const overlaps: string[] = [];
+    for (let r = 0; r < 256; r += 5) {
+      for (let g = 0; g < 256; g += 5) {
+        for (let b = 0; b < 256; b += 5) {
+          if (ranges.filter((inRange) => inRange(r, g, b)).length > 1)
+            overlaps.push(`${r},${g},${b}`);
+        }
+      }
+    }
+    expect(overlaps).toEqual([]);
   });
 
   it('leaves ordinary screen colours unclassified', () => {
@@ -57,9 +84,9 @@ describe('classifyPixel', () => {
       [32, 32, 32],
       [255, 255, 0], // yellow
       [255, 165, 0], // orange
-      [0, 0, 255], // blue
       [0, 255, 255], // cyan
-      [0, 120, 215] // Windows accent blue
+      [0, 120, 215], // Windows accent blue
+      [51, 144, 255] // a text selection highlight
     ]) {
       expect(classifyPixel(r, g, b), `${r},${g},${b}`).toBeNull();
     }
@@ -84,6 +111,14 @@ describe('sentinelFraction / changedFraction', () => {
     for (let i = 3; i < transparent.data.length; i += 4) transparent.data[i] = 0;
     expect(changedFraction(base, transparent)).toBe(0);
     expect(WINDOW_CHANGE_MIN).toBe(0.1);
+  });
+
+  it('a still screen changes by less than SCREEN_STILL_MAX (2 %)', () => {
+    expect(SCREEN_STILL_MAX).toBe(0.02);
+    const base = frame(GREY);
+    // 2 % of 5184 pixels is 103.68
+    expect(changedFraction(base, frame(GREY, DARK, 103))).toBeLessThan(SCREEN_STILL_MAX);
+    expect(changedFraction(base, frame(GREY, DARK, 104))).toBeGreaterThanOrEqual(SCREEN_STILL_MAX);
   });
 
   it('returns 0 for frames of different or broken sizes', () => {
@@ -131,11 +166,16 @@ describe('sentinelPresent / sentinelGone', () => {
     expect(sentinelGone(frame(GREY, LIME, 155), speck, 'lime')).toBe(true);
   });
 
-  it('a page of one sentinel is neither of the others', () => {
+  it('a page of one sentinel is none of the others', () => {
     const red = frame(DARK, [235, 16, 16], PIXELS * 0.75);
     expect(sentinelPresent(red, frame(DARK), 'red')).toBe(true);
     expect(sentinelPresent(red, frame(DARK), 'lime')).toBe(false);
     expect(sentinelPresent(red, frame(DARK), 'magenta')).toBe(false);
+    expect(sentinelPresent(red, frame(DARK), 'blue')).toBe(false);
+    const blue = frame(DARK, [16, 16, 235], PIXELS * 0.75);
+    expect(sentinelPresent(blue, frame(DARK), 'blue')).toBe(true);
+    expect(sentinelGone(frame(DARK), blue, 'blue')).toBe(true);
+    expect(sentinelPresent(blue, frame(DARK), 'magenta')).toBe(false);
   });
 
   it('is false for a baseline of another size and for a frame without pixels', () => {

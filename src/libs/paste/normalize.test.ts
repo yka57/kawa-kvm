@@ -28,6 +28,15 @@ describe('normalizeText', () => {
     expect(normalizeText(`a${BOM}b`, { punct: false })).toBe(`a${BOM}b`);
   });
 
+  it('removes soft hyphens, zero-width characters, word joiners and BOMs only with the flag', () => {
+    const text = 'a\u00adb\u200bc\u200cd\u200de\u2060f\ufeffg';
+    expect(normalizeText(text, { punct: true })).toBe('abcdefg');
+    expect(normalizeText(text, { punct: false })).toBe(text);
+    expect(normalizeText(`${BOM}${BOM}x`, { punct: true })).toBe('x');
+    // other invisible or format characters are not folded
+    expect(normalizeText('a\u200eb\u00a0c', { punct: true })).toBe('a\u200eb c');
+  });
+
   it('always folds CRLF and lone CR to LF', () => {
     expect(normalizeText('a\r\nb\rc\n\r\n', { punct: false })).toBe('a\nb\nc\n\n');
     expect(normalizeText('a\r\nb', { punct: true })).toBe('a\nb');

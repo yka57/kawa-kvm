@@ -17,6 +17,7 @@ import {
 } from '@/libs/paste/typing-engine';
 
 import {
+  capsHintKey,
   chordFromKeyEvent,
   classifyClipboardError,
   countSkipped,
@@ -185,10 +186,14 @@ describe('reasonKey', () => {
       'tab-hidden',
       'serial-error',
       'lock-busy',
+      'bridge-no-video',
+      'bridge-busy-screen',
       'bridge-no-window',
       'bridge-probe-failed',
+      'bridge-probe-red',
       'bridge-load-failed',
       'bridge-verify-failed',
+      'bridge-copy-failed',
       'bridge-close-failed',
       'caps-lock'
     ];
@@ -204,6 +209,25 @@ describe('reasonKey', () => {
     expect(reasonKey('key-interrupt')).toBe('paste.doneKey');
     expect(reasonKey('completed')).toBe('paste.doneCompleted');
     expect(reasonKey('caps-lock')).toBe('paste.doneCapsLock');
+    // spec v2 §14.10
+    expect(reasonKey('bridge-no-video')).toBe('paste.doneNoVideo');
+    expect(reasonKey('bridge-busy-screen')).toBe('paste.doneBusyScreen');
+    expect(reasonKey('bridge-probe-red')).toBe('paste.doneProbeRed');
+    expect(reasonKey('bridge-copy-failed')).toBe('paste.doneCopyFailed');
+  });
+});
+
+describe('capsHintKey', () => {
+  it('describes the pre-flight while it is on and warns about inverted letters while it is off', () => {
+    expect(capsHintKey(true)).toBe('paste.capsHint');
+    expect(capsHintKey(false)).toBe('paste.capsOffHint');
+    const enPaste = en.translation.paste as Record<string, string>;
+    const jaPaste = ja.translation.paste as Record<string, string>;
+    for (const key of [capsHintKey(true), capsHintKey(false)]) {
+      const leaf = key.slice('paste.'.length);
+      expect(typeof enPaste[leaf], key).toBe('string');
+      expect(typeof jaPaste[leaf], key).toBe('string');
+    }
   });
 });
 

@@ -117,10 +117,14 @@ const REASON_KEYS: Record<StopReason, string> = {
   'serial-error': 'doneSerial',
   // never shown: a busy lock means another run is in progress (no state written)
   'lock-busy': 'doneCancelled',
+  'bridge-no-video': 'doneNoVideo',
+  'bridge-busy-screen': 'doneBusyScreen',
   'bridge-no-window': 'doneNoWindow',
   'bridge-probe-failed': 'doneProbeFailed',
+  'bridge-probe-red': 'doneProbeRed',
   'bridge-load-failed': 'doneLoadFailed',
   'bridge-verify-failed': 'doneVerifyFailed',
+  'bridge-copy-failed': 'doneCopyFailed',
   'bridge-close-failed': 'doneCloseFailed',
   'caps-lock': 'doneCapsLock'
 };
@@ -143,6 +147,15 @@ const PHASE_KEYS: Record<PastePhase, string> = {
 /** i18n key of the bridge stage the pill shows while running (spec v2 §10). */
 export function phaseKey(phase: PastePhase): string {
   return `paste.${PHASE_KEYS[phase]}`;
+}
+
+/**
+ * The Caps Lock line at the bottom of the settings modal (spec v2 §14.10):
+ * what the pre-flight does while it is on, the inverted-case warning while
+ * it is off.
+ */
+export function capsHintKey(fixCapsLock: boolean): string {
+  return fixCapsLock ? 'paste.capsHint' : 'paste.capsOffHint';
 }
 
 const MAC_MODIFIER_LABELS = { meta: '⌘', ctrl: '⌃', alt: '⌥', shift: '⇧' } as const;

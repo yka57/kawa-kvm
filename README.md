@@ -25,16 +25,21 @@ The full documentation is in Japanese:
 - [docs/README.ja.md](docs/README.ja.md) — every feature and setting with its default and storage key, side effects, known limits.
 - [docs/TESTING.ja.md](docs/TESTING.ja.md) — the hardware checklist (about 30 minutes) with result tables for the assumptions the design rests on and the open questions.
 - [docs/spec-v1.md](docs/spec-v1.md) — the implementation spec (English). Where it disagrees with the code, the code and this README describe what ships (see _Deviations from the spec_).
-- [docs/spec-v2-japanese-paste.md](docs/spec-v2-japanese-paste.md) — spec v2 (English): Japanese and other non-ASCII paste, the IME-off key and the Caps Lock pre-flight. Spec v1 still applies where it is silent.
+- [docs/spec-v2-japanese-paste.md](docs/spec-v2-japanese-paste.md) — spec v2 (English): Japanese and other non-ASCII paste, the IME-off key and the Caps Lock pre-flight. Its §14 (the owner addendum after the review) overrides the earlier sections; spec v1 still applies where it is silent.
 
 ## Japanese and other non-ASCII text
 
-Spec: [docs/spec-v2-japanese-paste.md](docs/spec-v2-japanese-paste.md). Every stop message, the
-Linux caveats and the ETA table are in [docs/README.ja.md](docs/README.ja.md).
+Spec: [docs/spec-v2-japanese-paste.md](docs/spec-v2-japanese-paste.md); its §14 (the owner
+addendum after the review) overrides the earlier sections. Every stop message, the Linux caveats
+and the ETA table are in [docs/README.ja.md](docs/README.ja.md).
 
-Text the target layout can type completely (ASCII, after the optional punctuation folding) is typed
-key by key as before. Otherwise the _Japanese and other non-ASCII_ setting decides, and the text
-arrives byte-exact (no punctuation folding, no NFC). _Auto_ picks by Target OS:
+Text the target layout can type completely (ASCII, after the optional punctuation folding, which
+also removes the invisible U+00AD, U+200B, U+200C, U+200D, U+2060 and U+FEFF) is typed key by key
+as before. Otherwise the _Japanese and other non-ASCII_ setting decides for the whole text, and the
+text arrives byte-exact (no punctuation folding, no NFC). A single character without a key is
+enough: on a Windows target, `Set the oven to 180°C` (or `café`, `• item`, `a → b`, `3 × 4`, or an
+invisible character the folding keeps) goes through the browser as a whole. _Skip (ASCII only)_
+keeps the v1 behaviour: only those characters are skipped and listed. _Auto_ picks by Target OS:
 
 | Target OS | _Auto_ uses            | What happens                                                                                                            |
 | --------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -42,29 +47,52 @@ arrives byte-exact (no punctuation folding, no NFC). _Auto_ picks by Target OS:
 | Linux     | Ctrl+Shift+U           | Characters with a key are typed directly, every other code point as Ctrl+Shift+U, lowercase hex digits, Space           |
 | macOS     | Skip (ASCII only)      | Non-typeable characters are skipped and listed: both methods drive the target with Ctrl chords                          |
 
-The bridge, step by step (the pill shows each phase and _Don't touch anything until it finishes_):
+The bridge, step by step (the pill shows each phase and _Don't touch anything until it finishes_;
+none of the text is typed before the check page has worked):
 
-1. Open a window (Ctrl+Shift+N, Ctrl+Shift+P or Ctrl+N, see _Window opened by the bridge_) and
-   wait up to 4 s until a tenth of the captured screen has changed; Ctrl+L, then the IME-off key.
-2. First run after a page load or a change of layout, window, IME key or Target OS: type the probe
-   `data:text/html,<body bgcolor=magenta>` and wait up to 5 s for magenta, which proves that the
-   address bar takes the URL with this layout and IME.
+1. Wait for a readable video frame (up to 1 s) and a still target screen: two frames 0.3 s apart
+   that differ by less than 2 %, within 2.5 s. Otherwise stop before anything is sent, because
+   scrolling or video would pass for a new window. Then open a window (Ctrl+Shift+N, Ctrl+Shift+P
+   or Ctrl+N, see _Window opened by the bridge_) and wait up to 4 s until a tenth of the captured
+   screen has changed; Ctrl+L, then the IME-off key.
+2. On every run, type the check page
+   `data:text/html,<body bgcolor=red><script>document.bgColor='magenta'</script>` and wait up to
+   5 s. Magenta proves that the keys reach a browser address bar with this layout, IME and letter
+   case. Under Caps Lock the script fails (`DOCUMENT` is undefined) and the page stays red: Ctrl+W
+   (the page is ours), stop. Neither colour: stop without Ctrl+W.
 3. Type the text as a `data:text/html;charset=utf-8;base64,…` URL, then Delete and Enter. The page
    puts it in a textarea and turns lime when its hash matches, red otherwise (red: Ctrl+W, stop).
-4. Escape, Ctrl+A, Ctrl+C; Ctrl+W and wait until the lime is gone; Ctrl+V into the field that had
-   the focus before.
+4. Escape, Ctrl+A, Ctrl+C. The page's copy handler puts exactly the checked text on the clipboard
+   and turns blue; no blue within 1.5 s: stop without Ctrl+W or Ctrl+V.
+5. Ctrl+W, then wait up to 3 s until the screen matches the one from before the window (blue gone,
+   less than a tenth changed); only then Ctrl+V into the field that had the focus before.
 
-- **Requirements:** the target focus is in Chrome, Edge or Firefox (the window chord goes to the
-  foreground app); the video is showing and the HDMI capture shows the new window; the IME-off key
-  (HID LANG2, 0x91) needs Windows 10 2004+ or Windows 11 with the Japanese keyboard layout.
-- **Side effects:** a private window flashes; the target clipboard (and the Windows clipboard
-  history) holds the text; the target IME is left off; _Normal new window (Ctrl+N)_ keeps the URL,
-  and so the text, in the browser history.
+- **Requirements:** the target focus is in Chrome, Edge or Firefox. The window chord goes to the
+  foreground app: Notepad, Windows Terminal and VS Code open a new window on Ctrl+Shift+N, the check
+  page URL (and Enter) is typed into it and the run stops at the check page; none of the clipboard
+  text is typed there, and that window has to be closed by hand. With Firefox always choose
+  _Firefox private (Ctrl+Shift+P)_: Firefox's Ctrl+Shift+N reopens the last closed window, whose tab
+  the run would then use and close, ending at the close check instead of pasting. The video is
+  showing, the target screen is still when the run starts, and the HDMI capture shows the new
+  window. The IME-off key (HID LANG2, 0x91) needs Windows 10 2004+ or Windows 11 with the Japanese
+  keyboard layout.
+- **Side effects:** a private window flashes (the check page red then magenta, the text page lime
+  then blue); the target clipboard (and the Windows clipboard history) holds the text; the target
+  IME is left off; _Normal new window (Ctrl+N)_ keeps the URL, and so the text, in the browser
+  history. Blue proves that Ctrl+C reached the page, not that the OS accepted the clipboard write.
 - The first bridge run shows a one-time explanation with the ETA (`nanokvm-usb-paste-bridge-intro`).
-  At Normal speed a run costs about 14 s plus 0.16 s per Japanese character (300 characters ≈ 1 min).
+  At Normal speed a run costs about 22 s (screen check, check page and window included) plus 0.16 s
+  per Japanese character and 0.05 s per ASCII character: 300 Japanese characters take about 71 s.
 - Every paste, whatever the method: Windows targets get the IME-off key before the text (the
   bridge sends it in the new window's address bar), and a target Caps Lock that the device reports
-  as on is switched off first (JIS: Shift+CapsLock). Neither is restored.
+  as on is switched off first (JIS: Shift+CapsLock). Neither is restored. With _Turn the target Caps
+  Lock off automatically_ unchecked, the settings warn instead that letters are inverted when the
+  target has Caps Lock on (a bridge run then stops at the red check page).
+- While a paste runs, mouse moves and wheel reports (trackpad momentum included) are not sent;
+  button presses and releases are, and a press stops the run.
+- Linux (Ctrl+Shift+U): a cancel from the pill, row or hotkey, or a host key (muted, so it never
+  reaches the target), lets the character being entered finish; a click (it reaches the target) or
+  hiding the tab stops at once. Press Escape on the target if a half-entered code is left.
 - New _Fast_ speed (10 ms hold / 10 ms gap / 60 ms after Enter). The settings are stored as
   version 2; a version 1 `imePreKey: 'none'` becomes `'auto'`.
 - Not done: Windows Alt+numpad codes (the new Microsoft IME cuts values above 255 to their low byte,
@@ -176,10 +204,13 @@ lock-state query are not.
   macOS targets it is reported as skipped instead of being dropped silently.
 - Windows targets get the IME-off key (HID LANG2) before the text of a paste, and a target Caps
   Lock that the device reports as on is switched off first.
-- The serial port is read continuously (upstream left the device's replies unread). With _Turn the
-  target Caps Lock off automatically_ on (the default), a paste first asks the CH9329 for the
-  target's lock state with GET_INFO (`57 AB 00 01 00 03`); that command goes to the chip, not to
-  the target.
+- While a paste runs, mouse move and wheel reports are dropped (absolute, relative and touch);
+  button presses and releases still go through.
+- The serial port is read continuously (upstream left the device's replies unread), also after a
+  recoverable read error (break, framing, parity, overrun) when the port offers a new stream.
+  With _Turn the target Caps Lock off automatically_ on (the default), a paste first asks the
+  CH9329 for the target's lock state with GET_INFO (`57 AB 00 01 00 03`); that command goes to
+  the chip, not to the target.
 - Japanese-locale browsers get the Japanese UI.
 
 Everything else on the wire is byte-identical to upstream (verified by the parity tests).

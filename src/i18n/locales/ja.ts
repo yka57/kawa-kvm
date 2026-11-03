@@ -150,6 +150,8 @@ const ja = {
       bridgeChromium: 'Chrome / Edge のシークレット（Ctrl+Shift+N）',
       bridgeFirefox: 'Firefox のプライベート（Ctrl+Shift+P）',
       bridgeNewWindow: '通常の新しいウィンドウ（Ctrl+N）',
+      bridgeWindowHint:
+        'Firefox では「Firefox のプライベート」を選んでください（Firefox の Ctrl+Shift+N は閉じたウィンドウを開き直します）。',
       imePreKey: '入力前に操作先の IME をオフにする',
       imeAuto: '自動（Windows は IME オフキー）',
       imeLang2: 'IME オフキー（LANG2）',
@@ -180,14 +182,20 @@ const ja = {
       doneMouse: '停止: マウスがクリックされました',
       doneHidden: '停止: タブが非表示になりました',
       doneSerial: '停止: シリアル通信エラー',
+      doneNoVideo: '停止: 映像を取得できませんでした',
+      doneBusyScreen:
+        '停止: 操作先の画面が動き続けているため開始できませんでした（スクロールや動画が止まってから実行してください）',
       doneNoWindow:
         '停止: 新しいウィンドウを確認できませんでした（操作先でブラウザーを前面にしてください）',
       doneProbeFailed:
         '停止: 確認ページが表示されませんでした（キー配列と IME を確認し、開いたウィンドウを閉じてください）',
+      doneProbeRed:
+        '停止: 確認ページが赤のままでした（操作先の Caps Lock がオンか、JavaScript が無効です）',
       doneLoadFailed:
         '停止: ページが表示されませんでした（開いたウィンドウを確認して閉じてください）',
       doneVerifyFailed:
         '停止: 内容が一致しませんでした（速度を「安全」にするか Caps Lock を確認してください）',
+      doneCopyFailed: '停止: コピーを確認できませんでした（開いたウィンドウを閉じてください）',
       doneCloseFailed:
         '停止: 一時ウィンドウを閉じられませんでした（テキストは操作先のクリップボードにあります）',
       doneCapsLock: '停止: 操作先の Caps Lock をオフにできませんでした',
@@ -202,7 +210,8 @@ const ja = {
       empty: 'クリップボードにテキストがありません。',
       notConnected: 'シリアルが接続されていません',
       noVideo: '映像が表示されていないため、ブラウザー経由の入力は使えません',
-      capsHint: '機器から状態を読めた場合、操作先の Caps Lock は入力前に自動でオフにします。'
+      capsHint: '機器から状態を読めた場合、操作先の Caps Lock は入力前に自動でオフにします。',
+      capsOffHint: '操作先で Caps Lock がオンの場合、英字の大小が反転します。'
     },
     debug: {
       hidLog: 'HID ログ',

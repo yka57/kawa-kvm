@@ -46,6 +46,35 @@ describe('planPaste', () => {
     expect(planPaste('“a” あ', opts())).toMatchObject({ kind: 'bridge', text: '“a” あ' });
   });
 
+  it('one character without a key (°) sends the whole text to the bridge; skip types the rest', () => {
+    const text = 'Set the oven to 180°C';
+    expect(planPaste(text, opts())).toMatchObject({ kind: 'bridge', text });
+    const skip = planPaste(text, opts({ method: 'skip' }));
+    if (skip.kind !== 'direct') throw new Error(skip.kind);
+    expect(skip.compiled.skipped).toEqual([{ char: '°', index: 19, reason: 'no-key' }]);
+    expect(skip.compiled.stats.typed).toBe(text.length - 1);
+  });
+
+  it('drops invisible characters on the direct path only (spec v2 §14.9)', () => {
+    // soft hyphen, zero-width space, ZWNJ, ZWJ, word joiner, BOM inside the text
+    const text = 'a\u00adb\u200bc\u200cd\u200de\u2060f\ufeffg';
+    const direct = planPaste(text, opts());
+    if (direct.kind !== 'direct') throw new Error(direct.kind);
+    expect(direct.compiled.skipped).toEqual([]);
+    expect(direct.compiled.stats).toMatchObject({ chars: 7, typed: 7 });
+
+    // without folding they have no key: the bridge carries them byte-exact
+    expect(planPaste(text, opts({ normalizePunct: false }))).toMatchObject({
+      kind: 'bridge',
+      text
+    });
+    // a raw path keeps them even with folding on
+    expect(planPaste(`${text}あ`, opts())).toMatchObject({ kind: 'bridge', text: `${text}あ` });
+    const unicode = planPaste('a\u200bあ', opts({ method: 'ctrl-shift-u' }));
+    if (unicode.kind !== 'unicode') throw new Error(unicode.kind);
+    expect(unicode.compiled.stats).toMatchObject({ chars: 3, typed: 3 });
+  });
+
   it('skip keeps the v1 behaviour: Japanese is reported as skipped no-key', () => {
     const plan = planPaste('aあb', opts({ method: 'skip' }));
     expect(plan.kind).toBe('direct');

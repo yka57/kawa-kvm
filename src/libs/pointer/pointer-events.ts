@@ -63,6 +63,16 @@ export function clampWheelNotches(notches: number): number {
   return Math.max(-MAX_WHEEL_NOTCHES, Math.min(MAX_WHEEL_NOTCHES, Math.trunc(notches)));
 }
 
+/**
+ * While a paste run holds the HID lock (spec v2 §14.7) the target screen has
+ * to stay still for the browser bridge: wheel reports (a trackpad's momentum
+ * tail included) and pure moves are dropped. Button presses still go through
+ * (a press stops the run) and so do releases, which must never be lost.
+ */
+export function dropWhileHidLocked(event: { type: string }, hidLocked: boolean): boolean {
+  return hidLocked && (event.type === 'move' || event.type === 'wheel');
+}
+
 /** Suppress the browser default and stop bubbling (upstream's `disableEvent`). */
 export function disableEvent(event: { preventDefault(): void; stopPropagation(): void }): void {
   event.preventDefault();

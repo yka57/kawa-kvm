@@ -23,23 +23,37 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 /**
  * A Device on an open fake port. `answers[n]` is what the chip sends back
  * for the n-th GET_INFO (chunks pushed in order); nothing when absent.
+ * `glitch()` is a recoverable read error: as in WebSerial, the stream errors
+ * and the next `readable` access opens a new one; bytes sent in between
+ * wait for it.
  */
 async function setup(answers: number[][][] = []) {
   vi.stubGlobal('navigator', { serial: new EventTarget() });
   const clock = new FakeClock();
   const device = new Device(clock);
-  let controller!: ReadableStreamDefaultController<Uint8Array>;
-  const push = (bytes: number[]) => controller.enqueue(new Uint8Array(bytes));
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let stream: ReadableStream<Uint8Array> | null = null;
+  const waiting: number[][] = [];
+  const push = (bytes: number[]) => {
+    if (controller) controller.enqueue(new Uint8Array(bytes));
+    else waiting.push(bytes);
+  };
   const writes: number[][] = [];
   let requests = 0;
   const port = {
     open: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
-    readable: new ReadableStream<Uint8Array>({
-      start(c) {
-        controller = c;
+    get readable(): ReadableStream<Uint8Array> {
+      if (stream === null) {
+        stream = new ReadableStream<Uint8Array>({
+          start(c) {
+            controller = c;
+          }
+        });
+        waiting.splice(0).forEach(push);
       }
-    }),
+      return stream;
+    },
     writable: new WritableStream<Uint8Array>({
       write(chunk) {
         const bytes = Array.from(chunk);
@@ -49,7 +63,13 @@ async function setup(answers: number[][][] = []) {
     })
   };
   await device.serialPort.init({ port });
-  return { device, clock, writes, push };
+  const glitch = (name: string) => {
+    const errored = controller!;
+    stream = null;
+    controller = null;
+    errored.error(new DOMException(`${name} on the line`, name));
+  };
+  return { device, clock, writes, push, glitch };
 }
 
 describe('Device.getLockState', () => {
@@ -151,6 +171,20 @@ describe('Device.getLockState', () => {
     await tick();
     expect(await third).toMatchObject({ caps: false });
     expect(t.writes).toHaveLength(2);
+  });
+
+  it('still answers after a recoverable read error: the read loop resumes on the new stream', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const t = await setup([[info(0x02)]]);
+    t.glitch('FramingError');
+    await tick();
+    expect(error).toHaveBeenCalledWith('Serial read failed:', expect.any(DOMException));
+
+    let result: unknown = 'pending';
+    void t.device.getLockState().then((value) => (result = value));
+    await tick();
+    expect(result).toEqual({ num: false, caps: true, scroll: false, version: 0x38 });
+    expect(t.writes).toEqual([GET_INFO]);
   });
 
   it('answers null at once when the serial port is not open', async () => {

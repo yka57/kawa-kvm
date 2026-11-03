@@ -9,7 +9,7 @@ import {
   type PasteMethod,
   type PasteRunState
 } from '@/jotai/paste.ts';
-import { targetLayoutAtom, targetOsAtom, type TargetOs } from '@/jotai/target.ts';
+import { targetLayoutAtom, targetOsAtom } from '@/jotai/target.ts';
 import { getOperatingSystem, type System } from '@/libs/browser';
 import { realClock } from '@/libs/clock';
 import { device, type LockState } from '@/libs/device';
@@ -22,11 +22,10 @@ import { planPaste } from '@/libs/paste/plan';
 import {
   normalisePasteSettings,
   resolveImePreKey,
-  resolveUnicodeMethod,
-  type BridgeWindow
+  resolveUnicodeMethod
 } from '@/libs/paste/settings';
 import { PASTE_HARD_LIMIT } from '@/libs/paste/text-to-keys';
-import type { ImePreKey, SkippedChar, TargetLayout } from '@/libs/paste/types';
+import type { SkippedChar, TargetLayout } from '@/libs/paste/types';
 import {
   estimateProgramMs,
   PACING,
@@ -133,13 +132,6 @@ export type StartOutcome =
   | 'declined'
   | 'noVideo';
 
-interface BridgeTarget {
-  layout: TargetLayout;
-  imeOff: ImePreKey;
-  window: BridgeWindow;
-  targetOs: TargetOs;
-}
-
 /** The ETA a dialog shows, in whole seconds. */
 function etaSeconds(steps: readonly ProgramStep[], pacing: Pacing): number {
   return Math.ceil(estimateProgramMs(steps, pacing) / 1000);
@@ -154,11 +146,6 @@ export class PasteController {
   private explicitCancel = false;
   private skipped: SkippedSummary[] = [];
   private method: PasteMethod = 'direct';
-  /**
-   * Probe-cache key of the last successful probe page (spec v2 §9.3): in
-   * memory only, so a page reload probes again.
-   */
-  private probedKey: string | null = null;
 
   constructor(private readonly deps: PasteControllerDeps) {}
 
@@ -289,11 +276,12 @@ export class PasteController {
           this.notify('noVideo');
           return 'noVideo';
         }
-        steps = this.bridgeProgram(plan.text, {
+        // spec v2 §4.2 and §14: the probe page runs on every run
+        steps = buildBridgeProgram(buildBridgeUrl(plan.text), {
+          sampler: this.deps.sampler,
           layout,
           imeOff: imePreKey,
-          window: settings.bridgeWindow,
-          targetOs
+          window: settings.bridgeWindow
         });
         if (!this.deps.isBridgeIntroAccepted()) {
           const accepted = await this.confirmBridge(etaSeconds(steps, pacing));
@@ -319,29 +307,16 @@ export class PasteController {
         this.notify('notConnected');
         return 'notConnected';
       }
+      // ...and the capture may have stopped meanwhile: no window the bridge could not watch
+      if (plan.kind === 'bridge' && !this.deps.sampler.available()) {
+        this.notify('noVideo');
+        return 'noVideo';
+      }
 
       return this.launch(steps, pacing, plan.kind, skipped);
     } finally {
       this.pending = false;
     }
-  }
-
-  /**
-   * The bridge program (spec v2 §4.2). Its probe page runs until a probe
-   * succeeded for this layout, window, IME-off key and target OS (§9.3).
-   */
-  private bridgeProgram(text: string, target: BridgeTarget): ProgramStep[] {
-    const probeKey = [target.layout, target.window, target.imeOff, target.targetOs].join('|');
-    return buildBridgeProgram(buildBridgeUrl(text), {
-      sampler: this.deps.sampler,
-      layout: target.layout,
-      imeOff: target.imeOff,
-      window: target.window,
-      probe: probeKey !== this.probedKey,
-      onProbeOk: () => {
-        this.probedKey = probeKey;
-      }
-    });
   }
 
   /**

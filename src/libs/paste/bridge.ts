@@ -1,11 +1,13 @@
 import { KeycodeMap, ModifierBits } from '@/libs/keyboard/keymap';
 import {
   changedFraction,
+  SCREEN_STILL_MAX,
   sentinelGone,
   sentinelPresent,
   WINDOW_CHANGE_MIN,
   type Frame,
-  type FrameSampler
+  type FrameSampler,
+  type Sentinel
 } from '@/libs/media/frame-probe';
 import { getTable } from '@/libs/paste/layouts';
 import type { BridgeWindow } from '@/libs/paste/settings';
@@ -14,17 +16,23 @@ import type { ImePreKey, KeyStroke, TargetLayout } from '@/libs/paste/types';
 import type { ProgramStep, WaitVerdict } from '@/libs/paste/typing-engine';
 
 /**
- * Browser bridge (spec v2 §4): the target can only receive HID key reports,
- * so text without keys travels as an ASCII `data:` URL typed into the target
- * browser's address bar. The page puts the text in a textarea and turns lime
- * when its hash matches (red otherwise); the program watches the capture
- * video for that, copies the text, closes the window and pastes it into the
- * field that was focused before.
+ * Browser bridge (spec v2 §4, §14): the target can only receive HID key
+ * reports, so text without keys travels as an ASCII `data:` URL typed into
+ * the target browser's address bar. The page puts the text in a textarea and
+ * turns lime when its hash matches (red otherwise) and blue once it handled
+ * the copy; the program watches the capture video for that, closes the window
+ * and pastes the text into the field that was focused before.
  */
 
 export const BRIDGE_URL_PREFIX = 'data:text/html;charset=utf-8;base64,';
-/** Typed first to prove that address-bar typing works with this layout and IME. */
-export const BRIDGE_PROBE_URL = 'data:text/html,<body bgcolor=magenta>';
+/**
+ * Typed before the payload on every run, to prove that address-bar typing
+ * reaches a browser with this layout and IME. Case-sensitive on purpose: under
+ * Caps Lock the attribute still paints the page red, but `DOCUMENT` is
+ * undefined, so the script never turns it magenta.
+ */
+export const BRIDGE_PROBE_URL =
+  "data:text/html,<body bgcolor=red><script>document.bgColor='magenta'</script>";
 
 /** Java's String.hashCode over UTF-16 units: what the page script computes. */
 export function bridgeHash(value: string): number {
@@ -41,7 +49,9 @@ const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[
  * and newline). `&` and `<` are escaped so neither a character reference nor
  * `</textarea>` ends the RCDATA early; a leading newline is doubled because
  * the parser drops the first one after `<textarea>`. Colours are names:
- * legacy colour parsing would read `0f0` as almost black. Trailing spaces
+ * legacy colour parsing would read `0f0` as almost black. The copy handler
+ * puts exactly the checked value on the clipboard and turns the page blue,
+ * which proves that Ctrl+C reached the page (spec v2 §14.4). Trailing spaces
  * pad the UTF-8 length to a multiple of 3, so the base64 has no `=`.
  */
 export function buildBridgeHtml(value: string): { html: string; hash: number } {
@@ -51,8 +61,9 @@ export function buildBridgeHtml(value: string): { html: string; hash: number } {
   const hash = bridgeHash(text);
   const html =
     `<textarea id=t autofocus>${escaped}</textarea>` +
-    `<script>for(v=t.value,h=i=0;i<v.length;)h=h*31+v.charCodeAt(i++)|0;` +
-    `document.bgColor=h==${hash}?'lime':'red'</script>`;
+    `<script>d=document;for(v=t.value,h=i=0;i<v.length;)h=h*31+v.charCodeAt(i++)|0;` +
+    `d.bgColor=h==${hash}?'lime':'red';` +
+    `oncopy=e=>{e.clipboardData.setData('text',v);e.preventDefault();d.bgColor='blue'}</script>`;
   const padding = (3 - (new TextEncoder().encode(html).length % 3)) % 3;
   return { html: html + ' '.repeat(padding), hash };
 }
@@ -84,14 +95,16 @@ export interface BridgeDeps {
   /** Resolved; 'none' sends nothing. */
   imeOff: ImePreKey;
   window: BridgeWindow;
-  /** Type the probe page first (the controller skips it once a probe succeeded, §9.3). */
-  probe: boolean;
-  /** The probe page appeared: the controller caches the success. */
-  onProbeOk(): void;
 }
 
 export const BRIDGE_TIMING = {
   pollMs: 100,
+  /** A first readable frame before anything is sent. */
+  videoTimeoutMs: 1000,
+  /** Two samples this far apart must show a still screen... */
+  stillIntervalMs: 300,
+  /** ...within this time, or the run stops before the open-window chord. */
+  stillTimeoutMs: 2500,
   windowTimeoutMs: 4000,
   windowSettleMs: 600,
   focusSettleMs: 150,
@@ -99,16 +112,21 @@ export const BRIDGE_TIMING = {
   probeTimeoutMs: 5000,
   loadTimeoutBaseMs: 5000,
   loadTimeoutPer2kCharsMs: 1000,
-  copySettleMs: 250,
+  copyTimeoutMs: 1500,
   closeTimeoutMs: 3000,
   closeSettleMs: 300
 } as const;
 
 /** Typical durations of the waits, for the ETA only. */
 export const BRIDGE_ESTIMATES = {
+  /** The video is normally readable at once. */
+  videoMs: 0,
+  /** One sampling interval when the screen is still. */
+  stillMs: 300,
   windowMs: 800,
   probeLoadMs: 700,
   payloadLoadMs: 800,
+  copyMs: 250,
   closeMs: 500
 } as const;
 
@@ -140,15 +158,21 @@ function urlStrokes(url: string, layout: TargetLayout): KeyStroke[] {
 }
 
 /**
- * The bridge as a typing-engine program (spec v2 §4.2). Frames are sampled
- * from the injected sampler inside `run`/`wait` steps; the two baselines live
- * in this closure, so build one program per run.
+ * The bridge as a typing-engine program (spec v2 §4.2 as amended by §14).
+ * Frames are sampled from the injected sampler inside `wait`/`run` steps; the
+ * two baselines live in this closure, so build one program per run:
+ * `base1` is the still screen before the window opens (the close check
+ * compares with it), `base2` the opened window (the sentinel pages are
+ * measured against it). Nothing is sent before the screen was seen to be
+ * still, and the probe page runs on every run.
  */
 export function buildBridgeProgram(url: string, deps: BridgeDeps): ProgramStep[] {
   const { sampler } = deps;
   const T = BRIDGE_TIMING;
-  let screenBefore: Frame | null = null; // before the window opens
-  let newWindow: Frame | null = null; // the opened window: the baseline of every sentinel
+  const E = BRIDGE_ESTIMATES;
+  let base1: Frame | null = null; // the still screen before the window opens
+  let base2: Frame | null = null; // the opened window: the baseline of every sentinel page
+  let previous: Frame | null = null; // the still check's earlier sample
 
   const imeOff = imePreStroke(deps.imeOff, T.imeSettleMs);
   // Ctrl+L also works when Edge's new-tab page routes typing to its own search box
@@ -166,27 +190,52 @@ export function buildBridgeProgram(url: string, deps: BridgeDeps): ProgramStep[]
     const now = sampler.sample();
     return now === null ? 'pending' : verdict(now);
   };
+  /** The sentinel page painted over the window: ok, the other colour: fail. */
+  const page =
+    (ok: Sentinel, fail?: Sentinel) =>
+    (now: Frame): WaitVerdict => {
+      if (sentinelPresent(now, base2, ok)) return 'ok';
+      return fail !== undefined && sentinelPresent(now, base2, fail) ? 'fail' : 'pending';
+    };
+  const closeWindow = (): KeyStroke => chord('KeyW', CTRL);
   const [openCode, openMod] = OPEN_WINDOW[deps.window];
 
-  const steps: ProgramStep[] = [
+  return [
     { kind: 'phase', phase: 'window' },
     {
-      kind: 'run',
-      fn: () => {
-        screenBefore = sampler.sample();
-      }
+      kind: 'wait',
+      check: onScreen(() => 'ok'),
+      timeoutMs: T.videoTimeoutMs,
+      intervalMs: T.pollMs,
+      estimateMs: E.videoMs,
+      // nothing has been sent yet
+      timeoutReason: 'bridge-no-video'
+    },
+    {
+      // scrolling, video or a trackpad's momentum would pass for a new window
+      kind: 'wait',
+      check: onScreen((now) => {
+        const before = previous;
+        previous = now;
+        if (before === null || changedFraction(before, now) >= SCREEN_STILL_MAX) return 'pending';
+        base1 = now;
+        return 'ok';
+      }),
+      timeoutMs: T.stillTimeoutMs,
+      intervalMs: T.stillIntervalMs,
+      estimateMs: E.stillMs,
+      // nothing has been sent yet
+      timeoutReason: 'bridge-busy-screen'
     },
     { kind: 'keys', strokes: [chord(openCode, openMod)] },
     {
       kind: 'wait',
       check: onScreen((now) =>
-        screenBefore !== null && changedFraction(screenBefore, now) >= WINDOW_CHANGE_MIN
-          ? 'ok'
-          : 'pending'
+        base1 !== null && changedFraction(base1, now) >= WINDOW_CHANGE_MIN ? 'ok' : 'pending'
       ),
       timeoutMs: T.windowTimeoutMs,
       intervalMs: T.pollMs,
-      estimateMs: BRIDGE_ESTIMATES.windowMs,
+      estimateMs: E.windowMs,
       // only the open-window chord has been sent: nothing to clean up
       timeoutReason: 'bridge-no-window'
     },
@@ -194,68 +243,78 @@ export function buildBridgeProgram(url: string, deps: BridgeDeps): ProgramStep[]
     {
       kind: 'run',
       fn: () => {
-        newWindow = sampler.sample();
+        base2 = sampler.sample();
       }
     },
-    { kind: 'keys', strokes: focusAddressBar() }
-  ];
+    { kind: 'keys', strokes: focusAddressBar() },
 
-  if (deps.probe) {
-    steps.push(
-      { kind: 'phase', phase: 'probe' },
-      { kind: 'keys', strokes: navigate(BRIDGE_PROBE_URL) },
-      {
-        kind: 'wait',
-        check: onScreen((now) => (sentinelPresent(now, newWindow, 'magenta') ? 'ok' : 'pending')),
-        timeoutMs: T.probeTimeoutMs,
-        intervalMs: T.pollMs,
-        estimateMs: BRIDGE_ESTIMATES.probeLoadMs,
-        // no Ctrl+W: whatever has focus now may not be our window
-        timeoutReason: 'bridge-probe-failed'
-      },
-      { kind: 'run', fn: () => deps.onProbeOk() },
-      { kind: 'keys', strokes: focusAddressBar() }
-    );
-  }
+    { kind: 'phase', phase: 'probe' },
+    { kind: 'keys', strokes: navigate(BRIDGE_PROBE_URL) },
+    {
+      kind: 'wait',
+      check: onScreen(page('magenta', 'red')),
+      timeoutMs: T.probeTimeoutMs,
+      intervalMs: T.pollMs,
+      estimateMs: E.probeLoadMs,
+      // no Ctrl+W on a timeout: whatever has focus now may not be our window
+      timeoutReason: 'bridge-probe-failed',
+      // red: our probe page loaded but its script did not run (Caps Lock, JavaScript off)
+      failReason: 'bridge-probe-red',
+      onFail: [closeWindow()]
+    },
+    { kind: 'keys', strokes: focusAddressBar() },
 
-  steps.push(
     { kind: 'phase', phase: 'type' },
     { kind: 'keys', strokes: navigate(url) },
     { kind: 'phase', phase: 'verify' },
     {
       kind: 'wait',
-      check: onScreen((now) => {
-        if (sentinelPresent(now, newWindow, 'lime')) return 'ok';
-        return sentinelPresent(now, newWindow, 'red') ? 'fail' : 'pending';
-      }),
+      check: onScreen(page('lime', 'red')),
       timeoutMs: T.loadTimeoutBaseMs + Math.ceil(url.length / 2000) * T.loadTimeoutPer2kCharsMs,
       intervalMs: T.pollMs,
-      estimateMs: BRIDGE_ESTIMATES.payloadLoadMs,
+      estimateMs: E.payloadLoadMs,
       timeoutReason: 'bridge-load-failed',
       failReason: 'bridge-verify-failed',
       // the red page is ours, so closing it is safe
-      onFail: [chord('KeyW', CTRL)]
+      onFail: [closeWindow()]
     },
+
     { kind: 'phase', phase: 'copy' },
     {
       kind: 'keys',
       // Escape leaves an unedited omnibox for the page, whose textarea has autofocus
-      strokes: [chord('Escape'), chord('KeyA', CTRL), chord('KeyC', CTRL, T.copySettleMs)]
+      strokes: [chord('Escape'), chord('KeyA', CTRL), chord('KeyC', CTRL)]
     },
-    { kind: 'phase', phase: 'close' },
-    { kind: 'keys', strokes: [chord('KeyW', CTRL)] },
     {
       kind: 'wait',
-      check: onScreen((now) => (sentinelGone(now, newWindow, 'lime') ? 'ok' : 'pending')),
+      check: onScreen(page('blue')),
+      timeoutMs: T.copyTimeoutMs,
+      intervalMs: T.pollMs,
+      estimateMs: E.copyMs,
+      // the page never saw the copy: the target clipboard may hold something else
+      timeoutReason: 'bridge-copy-failed'
+    },
+
+    { kind: 'phase', phase: 'close' },
+    { kind: 'keys', strokes: [closeWindow()] },
+    {
+      kind: 'wait',
+      // the screen from before the window is back, not merely the page gone
+      check: onScreen((now) =>
+        base1 !== null &&
+        sentinelGone(now, base1, 'blue') &&
+        changedFraction(base1, now) < WINDOW_CHANGE_MIN
+          ? 'ok'
+          : 'pending'
+      ),
       timeoutMs: T.closeTimeoutMs,
       intervalMs: T.pollMs,
-      estimateMs: BRIDGE_ESTIMATES.closeMs,
+      estimateMs: E.closeMs,
       timeoutReason: 'bridge-close-failed'
     },
     // the OS reactivates the previous window, which restores its focused field
     { kind: 'sleep', ms: T.closeSettleMs },
     { kind: 'phase', phase: 'paste' },
     { kind: 'keys', strokes: [chord('KeyV', CTRL)] }
-  );
-  return steps;
+  ];
 }

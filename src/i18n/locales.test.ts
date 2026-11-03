@@ -167,6 +167,19 @@ describe('locale parity', () => {
     expect(enLeafKeys).not.toContain('paste.imeOff');
   });
 
+  it('en contains every paste key of spec v2 §14 (new stop reasons and hints)', () => {
+    const required = [
+      'doneNoVideo',
+      'doneBusyScreen',
+      'doneProbeRed',
+      'doneCopyFailed',
+      'bridgeWindowHint',
+      'capsOffHint'
+    ].map((key) => `paste.${key}`);
+    const missing = required.filter((key) => !enLeafKeys.includes(key));
+    expect(missing).toEqual([]);
+  });
+
   it('every other locale is a subset of en (extra keys only warn)', () => {
     const enSet = new Set(enKeys);
     for (const [name, locale] of Object.entries(locales)) {

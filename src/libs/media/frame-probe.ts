@@ -22,8 +22,13 @@ export const FRAME_W = 96;
 export const FRAME_H = 54;
 /** Share of changed pixels that means "a new window appeared". */
 export const WINDOW_CHANGE_MIN = 0.1;
+/**
+ * Two samples about 300 ms apart that differ by less than this share count as
+ * a still screen (spec v2 §14.3): scrolling or video must not pass for a window.
+ */
+export const SCREEN_STILL_MAX = 0.02;
 
-export type Sentinel = 'magenta' | 'lime' | 'red';
+export type Sentinel = 'magenta' | 'lime' | 'red' | 'blue';
 
 /** |dr| + |dg| + |db| from which a pixel counts as changed. */
 const CHANGE_MIN_DELTA = 96;
@@ -34,12 +39,13 @@ const GONE_MARGIN = 0.02;
 
 /**
  * Wide bounds on purpose: limited-range HDMI (16–235) and compression shift
- * the pure page colours, and the three ranges never overlap.
+ * the pure page colours, and the four ranges never overlap.
  */
 export function classifyPixel(r: number, g: number, b: number): Sentinel | null {
   if (r >= 150 && b >= 150 && g <= 110) return 'magenta';
   if (g >= 150 && r <= 110 && b <= 110) return 'lime';
   if (r >= 150 && g <= 90 && b <= 90) return 'red';
+  if (b >= 150 && r <= 90 && g <= 90) return 'blue';
   return null;
 }
 

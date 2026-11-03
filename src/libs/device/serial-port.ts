@@ -54,7 +54,8 @@ export class SerialPort {
       throw new Error('Serial port streams not available');
     }
 
-    this.reader = this.instance.readable.getReader();
+    const readable = this.instance.readable;
+    this.reader = readable.getReader();
     this.writer = this.instance.writable.getWriter();
     this.parser.reset();
 
@@ -63,7 +64,7 @@ export class SerialPort {
     }
 
     navigator.serial.addEventListener('disconnect', this.disconnectHandler);
-    void this.readLoop(this.reader);
+    void this.readLoop(this.reader, readable);
   }
 
   /**
@@ -104,6 +105,8 @@ export class SerialPort {
 
     this.releaseReader();
     this.releaseWriter();
+    // a frame cut off by the unplug must not be completed by the next port's bytes
+    this.parser.reset();
 
     this.instance = null;
 
@@ -152,26 +155,43 @@ export class SerialPort {
   }
 
   /**
-   * The port's only reader while it is open (spec v2 §8.2): one read() at a
-   * time, every chunk through the frame parser to the onFrame listeners.
+   * The port's only reader while it is open (spec v2 §8.2, §14.8): one read()
+   * at a time, every chunk through the frame parser to the onFrame listeners.
    * Unread replies would otherwise pile up in the stream. Ends when the
-   * stream is done (close() cancels the reader) or a read fails.
+   * stream is done (close() cancels the reader), on a disconnect, or on a
+   * read error after which the port offers no new stream.
    */
-  private async readLoop(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done || reader !== this.reader) return;
-        if (value) this.dispatch(this.parser.push(value));
+  private async readLoop(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    stream: ReadableStream<Uint8Array>
+  ): Promise<void> {
+    for (;;) {
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done || reader !== this.reader) return;
+          if (value) this.dispatch(this.parser.push(value));
+        }
+      } catch (err) {
+        // releasing or replacing a reader rejects its pending read: not an error of this port
+        if (reader !== this.reader) return;
+        if (isDisconnectError(err)) {
+          this.handleDisconnect();
+          return;
+        }
+        console.error('Serial read failed:', err);
+        // WebSerial: after a BreakError, FramingError, ParityError or BufferOverrunError the port
+        // stays open and `readable` is a new stream; after a fatal error it is null. The same
+        // (errored) stream again means there is nothing to resume.
+        const next = this.instance?.readable ?? null;
+        if (next === null || next === stream || next.locked) return;
+        this.releaseReader();
+        // the bytes of a frame cut by the error are gone
+        this.parser.reset();
+        stream = next;
+        reader = next.getReader();
+        this.reader = reader;
       }
-    } catch (err) {
-      // releasing or replacing a reader rejects its pending read: not an error of this port
-      if (reader !== this.reader) return;
-      if (isDisconnectError(err)) {
-        this.handleDisconnect();
-        return;
-      }
-      console.error('Serial read failed:', err);
     }
   }
 

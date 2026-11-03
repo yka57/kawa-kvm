@@ -7,6 +7,7 @@ import {
   BUTTONS_MASK,
   clampWheelNotches,
   disableEvent,
+  dropWhileHidLocked,
   isMouseLikePointer,
   MAX_WHEEL_NOTCHES,
   pointerButtonsMask
@@ -18,6 +19,22 @@ describe('isMouseLikePointer', () => {
     expect(isMouseLikePointer({ pointerType: 'pen' })).toBe(true);
     expect(isMouseLikePointer({ pointerType: 'touch' })).toBe(false);
     expect(isMouseLikePointer({ pointerType: '' })).toBe(false);
+  });
+});
+
+describe('dropWhileHidLocked', () => {
+  it('drops wheel and pure-move reports only while a paste run holds the HID lock', () => {
+    for (const type of ['move', 'wheel']) {
+      expect(dropWhileHidLocked({ type }, true), type).toBe(true);
+      expect(dropWhileHidLocked({ type }, false), type).toBe(false);
+    }
+  });
+
+  it('never drops button presses and releases (a press stops the run, a release must not be lost)', () => {
+    for (const type of ['buttons', 'mousedown', 'mouseup', 'release']) {
+      expect(dropWhileHidLocked({ type }, true), type).toBe(false);
+      expect(dropWhileHidLocked({ type }, false), type).toBe(false);
+    }
   });
 });
 

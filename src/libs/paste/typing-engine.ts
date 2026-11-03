@@ -34,10 +34,14 @@ export type StopReason =
   | 'tab-hidden'
   | 'serial-error'
   | 'lock-busy'
+  | 'bridge-no-video'
+  | 'bridge-busy-screen'
   | 'bridge-no-window'
   | 'bridge-probe-failed'
+  | 'bridge-probe-red'
   | 'bridge-load-failed'
   | 'bridge-verify-failed'
+  | 'bridge-copy-failed'
   | 'bridge-close-failed'
   | 'caps-lock';
 
@@ -114,6 +118,15 @@ export const DEFAULT_WAIT_INTERVAL_MS = 100;
 const PROGRESS_MIN_INTERVAL_MS = 50;
 const PROGRESS_EVERY_STROKES = 10;
 const OWNER = 'paste';
+
+/**
+ * Stops an atomic group may hold back (spec v2 §14.6): input that never
+ * reaches the target (the paste UI's Cancel, a host key the muted driver
+ * swallows). A click is forwarded to the target, and a hidden tab throttles
+ * the timers that would release the keys, so those stop at once, like a
+ * serial error.
+ */
+const DEFERRABLE: ReadonlySet<StopReason> = new Set<StopReason>(['cancelled', 'key-interrupt']);
 
 export class WriteTimeoutError extends Error {
   constructor(ms: number) {
@@ -227,13 +240,13 @@ export class TypingEngine {
    * Stops the current run. The HID lock is released synchronously so the
    * keyboard driver resumes at once; the pending sleep/send/check is aborted
    * and the run finishes with a best-effort ZERO report. First reason wins.
-   * Inside an atomic group every reason but 'serial-error' is deferred to the
-   * group's last release: half a Ctrl+Shift+U sequence would leave the target
-   * input method waiting for hex digits.
+   * Inside an atomic group 'cancelled' and 'key-interrupt' are deferred to the
+   * group's last release (half a Ctrl+Shift+U sequence would leave the target
+   * input method waiting for hex digits); every other reason stops at once.
    */
   cancel(reason: StopReason = 'cancelled'): void {
     if (this._state !== 'running') return;
-    if (this.groupOpen && reason !== 'serial-error') {
+    if (this.groupOpen && DEFERRABLE.has(reason)) {
       if (this.deferredReason === null) this.deferredReason = reason;
       return;
     }
@@ -367,19 +380,23 @@ export class TypingEngine {
       run.done++;
       run.etaMs -= strokeDurationMs(stroke, pacing);
       this.progress(run, false);
-      if (this.groupOpen && stroke.group !== nextGroup) this.closeGroup();
+      if (this.groupOpen && stroke.group !== nextGroup) this.closeGroup(run);
       if (this.stopReason === null && run.done < run.total) {
         await this.sleep(gapAfterMs(stroke, pacing));
       }
     }
   }
 
-  /** Leaves the atomic group; a cancel deferred inside it takes effect now. */
-  private closeGroup(): void {
+  /**
+   * Leaves the atomic group; a cancel deferred inside it takes effect now,
+   * unless the group ended the program's keys: the whole text is typed, so
+   * the run stays 'completed'.
+   */
+  private closeGroup(run: RunContext): void {
     this.groupOpen = false;
     const deferred = this.deferredReason;
     this.deferredReason = null;
-    if (deferred !== null) this.cancel(deferred);
+    if (deferred !== null && run.done < run.total) this.cancel(deferred);
   }
 
   private async runWait(step: WaitStep, run: RunContext): Promise<void> {

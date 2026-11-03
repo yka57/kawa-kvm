@@ -474,3 +474,53 @@ Shift+CapsLock on JIS, unknown state → no pre-flight, probe cache).
 Alt+numpad / EnableHexNumpad / Alt+X entry (see §0), PowerShell or DevTools bridges, chunking long bridge
 texts, macOS targets (⌘ chords), restoring the IME or Caps Lock state, ack-paced sending of every frame,
 OCR, target → host copy.
+
+## 14. Owner addendum (2026-11-04, after the adversarial review) — overrides the sections above
+
+1. **Probe every run** (replaces §9.3 and step 6's `probe` flag): the probe is the only proof that typing reaches
+   a browser address bar with the right layout before user data is typed. `BridgeDeps.probe`/`onProbeOk` and the
+   controller's probe cache are removed.
+2. **Case-sensitive probe** (replaces `BRIDGE_PROBE_URL`):
+   `data:text/html,<body bgcolor=red><script>document.bgColor='magenta'</script>`. Under Caps Lock the script
+   fails (`DOCUMENT` is undefined) and the page stays red. Probe wait: magenta present → ok; red present → fail
+   with `onFail` [Ctrl+W] (the red page is ours) and stop `'bridge-probe-red'`; timeout → `'bridge-probe-failed'`
+   (no Ctrl+W).
+3. **Still screen before anything is sent** (replaces step 1): wait A — a non-null frame (timeout 1000 ms →
+   `'bridge-no-video'`); wait B — two samples about 300 ms apart (`intervalMs` 300) with
+   `changedFraction < SCREEN_STILL_MAX = 0.02`; the later one is `base1` (timeout 2500 ms → `'bridge-busy-screen'`).
+   Only then the open-window chord. The controller re-checks `sampler.available()` right before launching.
+4. **Copy confirmation**: the payload script becomes
+   `d=document;for(v=t.value,h=i=0;i<v.length;)h=h*31+v.charCodeAt(i++)|0;d.bgColor=h=={hash}?'lime':'red';oncopy=e=>{e.clipboardData.setData('text',v);e.preventDefault();d.bgColor='blue'}`
+   (same textarea, escaping, padding and hash rules). After Escape, Ctrl+A, Ctrl+C: wait for blue present vs
+   `base2` (timeout `copyTimeoutMs` 1500 → `'bridge-copy-failed'`, no Ctrl+W, no Ctrl+V). `copySettleMs` is no
+   longer needed after Ctrl+C. New sentinel `blue`: `b >= 150 && r <= 90 && g <= 90` (disjoint from the others).
+5. **Close check against the screen before the window** (replaces step 10's wait): ok only when
+   `sentinelGone(now, base1, 'blue')` and `changedFraction(base1, now) < WINDOW_CHANGE_MIN`; timeout
+   `closeTimeoutMs` → `'bridge-close-failed'`, never Ctrl+V.
+6. **Deferral only for input that never reaches the target** (replaces the atomic-group rule of §6): only
+   `'cancelled'` and `'key-interrupt'` are deferred inside a group. `'mouse-interrupt'` (the click is forwarded to
+   the target) and `'tab-hidden'` (background timer throttling would hold keys about 1 s and autorepeat; pagehide
+   could leave a key down) stop at once, like `'serial-error'`. A deferred cancel that would take effect after the
+   program's last stroke is dropped: the run ends `'completed'`.
+7. **Mouse quiet while the HID lock is held**: the absolute, relative and touch paths drop wheel reports and
+   pure-move reports while `hidLock.isLocked()`; button presses and releases still go through (a press stops the
+   run as before; releases must never be lost).
+8. **Serial read recovery**: after a non-fatal read error (BreakError, FramingError, ParityError,
+   BufferOverrunError) WebSerial offers a new `port.readable`; the loop releases the old reader, resets the parser
+   and continues on the new stream. `handleDisconnect` also resets the parser.
+9. **Invisible characters**: with `normalizePunct`, the direct path also removes U+00AD, U+200B, U+200C, U+200D,
+   U+2060 and U+FEFF, so they no longer send ASCII text through the bridge. Raw paths keep them.
+10. **New stop reasons and strings** (ja / en):
+
+| reason               | key            | ja                                                                                                           | en                                                                               |
+| -------------------- | -------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `bridge-no-video`    | doneNoVideo    | 停止: 映像を取得できませんでした                                                                             | Stopped: no video frame could be read                                            |
+| `bridge-busy-screen` | doneBusyScreen | 停止: 操作先の画面が動き続けているため開始できませんでした（スクロールや動画が止まってから実行してください） | Stopped: the target screen kept changing (wait until scrolling or video stops)   |
+| `bridge-probe-red`   | doneProbeRed   | 停止: 確認ページが赤のままでした（操作先の Caps Lock がオンか、JavaScript が無効です）                       | Stopped: the check page stayed red (target Caps Lock on, or JavaScript disabled) |
+| `bridge-copy-failed` | doneCopyFailed | 停止: コピーを確認できませんでした（開いたウィンドウを閉じてください）                                       | Stopped: the copy could not be confirmed (close the opened window)               |
+
+Also: `paste.bridgeWindowHint` (shown under the window select): ja 「Firefox では「Firefox のプライベート」を
+選んでください（Firefox の Ctrl+Shift+N は閉じたウィンドウを開き直します）。」 / en "With Firefox choose Firefox
+private (in Firefox, Ctrl+Shift+N reopens a closed window)."; `paste.capsOffHint` (shown instead of `capsHint`
+when `fixCapsLock` is off): ja 「操作先で Caps Lock がオンの場合、英字の大小が反転します。」 / en "If the target
+has Caps Lock on, letters are inverted.".

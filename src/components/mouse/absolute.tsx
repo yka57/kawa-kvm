@@ -7,6 +7,7 @@ import { MouseAbsoluteEvent } from '@/components/mouse/types.ts';
 import { videoRotationAtom } from '@/jotai/device.ts';
 import { scrollDirectionAtom, scrollIntervalAtom, scrollPxPerNotchAtom } from '@/jotai/mouse.ts';
 import { device } from '@/libs/device';
+import { hidLock } from '@/libs/keyboard/hid-lock';
 import { MouseAbsoluteRelative } from '@/libs/mouse';
 import { mouseJiggler } from '@/libs/mouse-jiggler';
 import { onMouseRelease } from '@/libs/mouse/release-bus';
@@ -16,6 +17,7 @@ import {
   applyButtonsMask,
   clampWheelNotches,
   disableEvent,
+  dropWhileHidLocked,
   isMouseLikePointer,
   pointerButtonsMask
 } from '@/libs/pointer/pointer-events';
@@ -278,8 +280,15 @@ export const Absolute = () => {
 
   // Mouse event handler, shared by the pointer and touch paths. MOVE reports
   // coalesce while a write is in flight; everything else is never dropped and
-  // is sent after any move queued before it (override 3).
+  // is sent after any move queued before it (override 3). While a paste run
+  // holds the HID lock, moves and wheel are dropped (spec v2 §14.7).
   function handleMouseEvent(event: MouseAbsoluteEvent): void {
+    if (dropWhileHidLocked(event, hidLock.isLocked())) {
+      // keep tracking the pointer without sending it: a click that stops the
+      // run (or the first one after it) must land where the user sees it
+      if (event.type === 'move') lastPosRef.current = { x: event.x, y: event.y };
+      return;
+    }
     const mouse = mouseRef.current;
     const queue = queueRef.current;
     const { x, y } = lastPosRef.current;

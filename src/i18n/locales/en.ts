@@ -149,6 +149,8 @@ const en = {
       bridgeChromium: 'Chrome / Edge private (Ctrl+Shift+N)',
       bridgeFirefox: 'Firefox private (Ctrl+Shift+P)',
       bridgeNewWindow: 'Normal new window (Ctrl+N)',
+      bridgeWindowHint:
+        'With Firefox choose Firefox private (in Firefox, Ctrl+Shift+N reopens a closed window).',
       imePreKey: 'Turn the target IME off before typing',
       imeAuto: 'Auto (IME-off key on Windows)',
       imeLang2: 'IME-off key (LANG2)',
@@ -179,11 +181,17 @@ const en = {
       doneMouse: 'Stopped: mouse clicked',
       doneHidden: 'Stopped: tab hidden',
       doneSerial: 'Stopped: serial error',
+      doneNoVideo: 'Stopped: no video frame could be read',
+      doneBusyScreen:
+        'Stopped: the target screen kept changing (wait until scrolling or video stops)',
       doneNoWindow: 'Stopped: no new window appeared (bring the target browser to the front)',
       doneProbeFailed:
         'Stopped: the check page did not appear (check the layout and IME, then close the window)',
+      doneProbeRed:
+        'Stopped: the check page stayed red (target Caps Lock on, or JavaScript disabled)',
       doneLoadFailed: 'Stopped: the page did not appear (check and close the opened window)',
       doneVerifyFailed: 'Stopped: the text did not match (try the Safe speed or check Caps Lock)',
+      doneCopyFailed: 'Stopped: the copy could not be confirmed (close the opened window)',
       doneCloseFailed:
         'Stopped: the temporary window did not close (the text is on the target clipboard)',
       doneCapsLock: 'Stopped: could not turn the target Caps Lock off',
@@ -198,7 +206,8 @@ const en = {
       empty: 'The clipboard has no text.',
       notConnected: 'Serial is not connected',
       noVideo: 'The video is not showing, so typing via the browser is unavailable',
-      capsHint: 'When the device reports it, the target Caps Lock is turned off before typing.'
+      capsHint: 'When the device reports it, the target Caps Lock is turned off before typing.',
+      capsOffHint: 'If the target has Caps Lock on, letters are inverted.'
     },
     debug: {
       hidLog: 'HID log',

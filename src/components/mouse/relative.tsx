@@ -11,6 +11,7 @@ import {
   scrollPxPerNotchAtom
 } from '@/jotai/mouse.ts';
 import { device } from '@/libs/device';
+import { hidLock } from '@/libs/keyboard/hid-lock';
 import { MouseReportRelative } from '@/libs/mouse';
 import { mouseJiggler } from '@/libs/mouse-jiggler';
 import { onMouseRelease } from '@/libs/mouse/release-bus';
@@ -19,6 +20,7 @@ import {
   applyButtonsMask,
   clampWheelNotches,
   disableEvent,
+  dropWhileHidLocked,
   isMouseLikePointer,
   pointerButtonsMask
 } from '@/libs/pointer/pointer-events';
@@ -263,7 +265,9 @@ export const Relative = () => {
 
   // Mouse handler: MOVE deltas coalesce while a write is in flight and are
   // split into int8 reports on the wire; everything else is never dropped.
+  // While a paste run holds the HID lock, moves and wheel are dropped (spec v2 §14.7).
   function handleMouseEvent(event: MouseRelativeEvent): void {
+    if (dropWhileHidLocked(event, hidLock.isLocked())) return;
     const mouse = mouseRef.current;
     const queue = queueRef.current;
     const send = (report: number[]): void => {

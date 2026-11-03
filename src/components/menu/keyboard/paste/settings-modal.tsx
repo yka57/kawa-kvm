@@ -26,7 +26,7 @@ import * as storage from '@/libs/storage';
 import type { TargetLayout } from '@/libs/storage';
 
 import { pasteController, pasteSettingsModalAtom } from './controller.ts';
-import { chordFromKeyEvent, formatChord } from './decide.ts';
+import { capsHintKey, chordFromKeyEvent, formatChord } from './decide.ts';
 
 /**
  * Paste settings modal (spec v1 §5.5, v2 §10), mounted once in App.tsx and
@@ -249,6 +249,11 @@ export const PasteSettingsModal = () => {
             options={bridgeWindowOptions}
             onChange={(bridgeWindow) => update({ bridgeWindow })}
           />
+          {unicodeMethod === 'bridge' && (
+            <span className="col-span-2 -mt-1 text-xs text-neutral-500">
+              {t('paste.bridgeWindowHint')}
+            </span>
+          )}
 
           <span className="text-neutral-400">{t('paste.imePreKey')}</span>
           <Select
@@ -330,7 +335,7 @@ export const PasteSettingsModal = () => {
           )}
         </div>
 
-        <span className="text-xs text-neutral-500">{t('paste.capsHint')}</span>
+        <span className="text-xs text-neutral-500">{t(capsHintKey(settings.fixCapsLock))}</span>
       </div>
     </Modal>
   );

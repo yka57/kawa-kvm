@@ -963,6 +963,93 @@ describe('TypingEngine atomic groups', () => {
     hung.sink.releaseHung();
   });
 
+  it('stops at once on a click or a hidden tab inside a group: no press after the event, ZERO last', async () => {
+    const cases = [
+      ['pointerdown', 'mouse-interrupt'],
+      ['mousedown', 'mouse-interrupt'],
+      ['touchstart', 'mouse-interrupt'],
+      ['visibilitychange', 'tab-hidden'],
+      ['pagehide', 'tab-hidden']
+    ] as const;
+    for (const [type, reason] of cases) {
+      const target = Object.assign(new EventTarget(), { visibilityState: 'hidden' });
+      const t = setup({ interruptTarget: target });
+      const { result: promise } = await begin(
+        t.engine,
+        [{ kind: 'keys', strokes: [group(0x04, 1), group(0x05, 1), group(0x06, 1)] }],
+        PACING.normal
+      );
+      await t.clock.advanceAsync(10); // holding the group's first key
+      target.dispatchEvent(new Event(type));
+      // the click reaches the target at once: the rest of the group must not follow it
+      expect(t.lock.isLocked(), type).toBe(false);
+      await flushMicrotasks();
+      expect(await promise, type).toEqual({ reason, typedStrokes: 0, totalStrokes: 3 });
+      expect(t.sink.reports, type).toEqual([ZERO, KEY_A, ZERO]);
+      expect(t.times, type).toEqual([0, 0, 10]);
+      expect(t.clock.pendingTimers(), type).toBe(0);
+    }
+  });
+
+  it('pagehide while a group key is held: the ZERO goes out without any timer firing', async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [{ kind: 'keys', strokes: [group(0x04, 1), group(0x05, 1)] }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(10);
+    expect(t.sink.reports).toEqual([ZERO, KEY_A]);
+
+    t.target.dispatchEvent(new Event('pagehide'));
+    // the page is being unloaded: no clock advance, microtasks only
+    await flushMicrotasks();
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO]);
+    expect(t.clock.now()).toBe(10);
+    expect(t.engine.state).toBe('idle');
+    expect(await promise).toEqual({ reason: 'tab-hidden', typedStrokes: 0, totalStrokes: 2 });
+  });
+
+  it("a cancel deferred in the program's last group is dropped: the whole text is typed, completed", async () => {
+    for (const interrupt of ['cancel', 'keydown'] as const) {
+      const t = setup();
+      const { result: promise } = await begin(
+        t.engine,
+        [{ kind: 'keys', strokes: [A, group(0x05, 1), group(0x06, 1)] }],
+        PACING.normal
+      );
+      await t.clock.advanceAsync(50); // A 0–20, its gap, B (the last group's first key) from 40
+      if (interrupt === 'cancel') t.engine.cancel();
+      else t.target.dispatchEvent(keydown('KeyQ'));
+      expect(t.engine.state, interrupt).toBe('running');
+
+      await t.clock.advanceAsync(100);
+      expect(await promise, interrupt).toEqual({
+        reason: 'completed',
+        typedStrokes: 3,
+        totalStrokes: 3
+      });
+      expect(t.sink.reports, interrupt).toEqual([
+        ZERO,
+        KEY_A,
+        ZERO,
+        KEY_B,
+        ZERO,
+        KEY_C,
+        ZERO,
+        ZERO
+      ]);
+      expect(t.times, interrupt).toEqual([0, 0, 20, 40, 60, 80, 100, 100]);
+      expect(t.lock.isLocked(), interrupt).toBe(false);
+      expect(t.events[t.events.length - 1], interrupt).toMatchObject({
+        type: 'stop',
+        done: 3,
+        total: 3,
+        reason: 'completed'
+      });
+    }
+  });
+
   it('cancels at once between groups and outside them', async () => {
     const t = setup();
     const { result: promise } = await begin(
