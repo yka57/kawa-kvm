@@ -68,7 +68,10 @@ const ja = {
       remap: {
         title: '⌘ キー変換（Mac）',
         off: 'オフ（⌘ を Win として送信）',
-        on: 'オン（⌘ → Ctrl）',
+        on: 'オン（⌘ を Ctrl / Win に変換）',
+        split: '指定キーだけ ⌘ → Ctrl、それ以外の ⌘ は Win（⌘ 単独 = Win）',
+        ctrlKeys: 'Ctrl にするキー',
+        ctrlKeysHint: '英字・数字を並べて入力（例: ACFVXZ）。オフにすると ⌘ はすべて Ctrl',
         inactiveMacTarget: '操作先が macOS のため無効です',
         nav: 'Mac 風ナビゲーションも変換（⌘←/→, ⌥←/→, ⌘⇧[ ]）',
         jis: '英数/かな → 無変換/変換（MS-IME で IME オフ/オンを割り当て済みの場合）',
@@ -78,7 +81,7 @@ const ja = {
         helpFullscreen: '全画面時のみ動作',
         helpNever: 'その他（⌘Tab, ⌘Space, ⌘Q など）は「ショートカット」から送信してください',
         sideEffects:
-          'オン時は ⌘クリック = Ctrl+クリック、⌘+ホイール = Ctrl+ホイール（ズーム）になります',
+          '振り分けオフ時は ⌘クリック = Ctrl+クリック、⌘+ホイール = Ctrl+ホイール（ズーム）。振り分けオン時、⌘ はキーと組み合わせたときだけ送信されます（⌘⇧S = Win+Shift+S など）',
         enterFullscreen: '全画面にする',
         keyTest: 'キーテスト',
         keyTestHint: 'テスト中はキーは送信されません',

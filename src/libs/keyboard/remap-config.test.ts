@@ -4,10 +4,12 @@ import { NO_MODS } from '@/test/fakes';
 
 import {
   DEFAULT_REMAP_CONFIG,
+  isCtrlKey,
   isRemapActive,
   mapModifier,
   matchChord,
   matchRule,
+  normalizeCtrlKeys,
   normalizeRemapConfig,
   REMAP_RULES,
   remapRecordedCode,
@@ -33,7 +35,9 @@ describe('normalizeRemapConfig', () => {
       macCapsLockFix: true,
       tapReleaseMs: 50,
       minPressMs: 30,
-      repeatUnderMeta: true
+      repeatUnderMeta: true,
+      cmdSplit: true,
+      ctrlKeys: 'ACFVXZ'
     });
   });
 
@@ -74,6 +78,23 @@ describe('normalizeRemapConfig', () => {
     expect(normalizeRemapConfig({ minPressMs: -5 }).minPressMs).toBe(0);
     expect(normalizeRemapConfig({ minPressMs: 500 }).minPressMs).toBe(100);
     expect(normalizeRemapConfig({ minPressMs: 0 }).minPressMs).toBe(0);
+  });
+});
+
+describe('ctrlKeys', () => {
+  it('normalises to unique uppercase letters and digits', () => {
+    expect(normalizeCtrlKeys('a c,f v-x z c 1é')).toBe('ACFVXZ1');
+    expect(normalizeRemapConfig({ ctrlKeys: 'zx' }).ctrlKeys).toBe('ZX');
+    expect(normalizeRemapConfig({ ctrlKeys: 3 }).ctrlKeys).toBe('ACFVXZ');
+    expect(normalizeRemapConfig({ cmdSplit: false }).cmdSplit).toBe(false);
+  });
+
+  it('isCtrlKey matches physical letter and digit codes only', () => {
+    const cfg = { ...DEFAULT_REMAP_CONFIG, ctrlKeys: 'C1' };
+    expect(isCtrlKey(cfg, 'KeyC')).toBe(true);
+    expect(isCtrlKey(cfg, 'Digit1')).toBe(true);
+    expect(isCtrlKey(cfg, 'KeyS')).toBe(false);
+    expect(isCtrlKey(cfg, 'Numpad1')).toBe(false);
   });
 });
 

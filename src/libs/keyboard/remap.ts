@@ -2,6 +2,7 @@ import type { System } from '@/libs/browser';
 
 import { getKeycode, isModifier } from './keymap';
 import {
+  isCtrlKey,
   mapModifier,
   matchChord,
   matchRule,
@@ -56,6 +57,8 @@ export interface KeyEntry {
   synthetic?: boolean;
   /** Per-key modifier override of a rule; active while the entry is unreleased. */
   override?: ModifierOverride;
+  /** ⌘ in split mode: tracked, but never on the wire by itself (keys decide Ctrl or Win). */
+  latent?: boolean;
 }
 
 export interface RemapState {
@@ -68,6 +71,8 @@ export interface RemapState {
   deferred: Set<Logical>;
   /** ⌘ released while a tap was younger than minPressMs: the sweep waits for the tap timers. */
   sweepPending: boolean;
+  /** Split mode: ⌘ is down and nothing else was pressed since (⌘ up alone = Win tap). */
+  metaSolo: boolean;
   /** Windows host only (upstream AltGr hack). */
   altGr: { active: boolean; ctrlLeftTimestamp: number } | null;
 }
@@ -102,6 +107,31 @@ export function logicalOf(code: string): Logical | null {
 
 const isMetaCode = (code: string): boolean => code === 'MetaLeft' || code === 'MetaRight';
 
+/** Split mode applies to this ⌘ (macOS host remap active, cmdSplit on). */
+function isLatentMeta(ctx: RemapContext, code: string): boolean {
+  return ctx.active && ctx.cfg.cmdSplit && isMetaCode(code);
+}
+
+/** HID code of a modifier entry: ⌘ stays ⌘ (latent) in split mode, else the v1 mapping. */
+function modEntry(ctx: RemapContext, code: string, now: number, synthetic?: boolean): KeyEntry {
+  const latent = isLatentMeta(ctx, code);
+  return {
+    kind: 'mod',
+    out: latent ? code : mapModifier(code, ctx.active),
+    tap: false,
+    released: false,
+    pressedAt: now,
+    ...(synthetic ? { synthetic: true } : {}),
+    ...(latent ? { latent: true } : {})
+  };
+}
+
+/** Split mode: ⌘ + key goes out as Ctrl + key for ctrlKeys, Win + key otherwise. */
+function splitOverride(ctx: RemapContext, mods: HostMods, code: string): ModifierOverride | null {
+  if (!ctx.active || !ctx.cfg.cmdSplit || !mods.meta) return null;
+  return isCtrlKey(ctx.cfg, code) ? { ctrl: true, meta: false } : { meta: true };
+}
+
 export function createRemapState(hostOS: System): RemapState {
   return {
     hostOS,
@@ -109,6 +139,7 @@ export function createRemapState(hostOS: System): RemapState {
     wireMods: new Set(),
     deferred: new Set(),
     sweepPending: false,
+    metaSolo: false,
     altGr: hostOS === 'Windows' ? { active: false, ctrlLeftTimestamp: 0 } : null
   };
 }
@@ -231,14 +262,7 @@ function resync(
     if (mods[logical]) {
       if (logical !== ownLogical && have.length === 0) {
         const code = CANONICAL[logical];
-        st.keys.set(code, {
-          kind: 'mod',
-          out: mapModifier(code, ctx.active),
-          tap: false,
-          released: false,
-          pressedAt: now,
-          synthetic: true
-        });
+        st.keys.set(code, modEntry(ctx, code, now, true));
       }
     } else {
       const stale = have.filter((hostCode) => hostCode !== ownCode);
@@ -282,6 +306,13 @@ function onKeyDown(
   const now = ev.timeStamp;
 
   if (ev.key === 'Process') b.post.push({ type: 'hint', id: 'ime-composing' });
+
+  // any other key while ⌘ is down means ⌘ was a modifier, not a lone Win tap
+  if (isLatentMeta(ctx, code)) {
+    if (!ev.repeat && !physicalMods(st).meta) st.metaSolo = true;
+  } else {
+    st.metaSolo = false;
+  }
 
   // 2a. a deferred ⌘-up sweep completes before anything new is pressed
   if (st.sweepPending) flushSweep(st, b);
@@ -354,16 +385,10 @@ function onKeyDown(
   // the lazy re-press is for keys; a user pressing the modifier again wants it
   // down now (⌘-click = Ctrl+click right after a ⌘← tap).
   if (isModifier(code)) {
-    const out = mapModifier(code, ctx.active);
-    const logical = logicalOf(out);
+    const entry = modEntry(ctx, code, now);
+    const logical = logicalOf(entry.out);
     if (logical) st.deferred.delete(logical);
-    st.keys.set(code, {
-      kind: 'mod',
-      out,
-      tap: false,
-      released: false,
-      pressedAt: now
-    });
+    st.keys.set(code, entry);
     return;
   }
 
@@ -377,7 +402,8 @@ function onKeyDown(
       finishEntry(st, hostCode, b);
   }
   const tap = ctx.active && mods.meta;
-  if (rule) {
+  const override = rule?.mods ?? splitOverride(ctx, mods, code) ?? undefined;
+  if (override) {
     for (const [hostCode, other] of [...st.keys]) {
       if (other.kind === 'key' && other.tap && !other.released) finishEntry(st, hostCode, b);
     }
@@ -389,7 +415,7 @@ function onKeyDown(
     tap,
     released: false,
     pressedAt: now,
-    override: rule?.mods
+    override
   });
   b.post.push({ type: 'press', code: out });
   if (tap) b.post.push({ type: 'release-after', code, ms: cfg.tapReleaseMs });
@@ -429,9 +455,15 @@ function onKeyUp(
     if (ctx.active && hasYoungTap(st, now, ctx.cfg.minPressMs)) {
       st.sweepPending = true;
     } else {
+      const solo = st.metaSolo && existing?.kind === 'mod' && existing.latent === true;
       sweep(st, b);
       finishEntry(st, code, b);
+      // ⌘ pressed and released alone: a Win tap (Start menu)
+      if (solo && !physicalMods(st).meta) {
+        b.post.push({ type: 'press', code }, { type: 'release', code });
+      }
     }
+    st.metaSolo = false;
   } else if (st.sweepPending && existing?.kind === 'key' && existing.tap && !existing.released) {
     // keyup of a tap during a deferred sweep: its timer releases it (minPressMs)
   } else {
@@ -467,7 +499,7 @@ function reconcile(st: RemapState, b: Buckets): void {
     }
   };
   for (const entry of st.keys.values()) {
-    if (entry.kind === 'mod' && !entry.released) add(entry.out);
+    if (entry.kind === 'mod' && !entry.released && !entry.latent) add(entry.out);
   }
   for (const entry of st.keys.values()) {
     if (entry.kind !== 'key' || entry.released || !entry.override) continue;

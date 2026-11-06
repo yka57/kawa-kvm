@@ -38,7 +38,7 @@ export const Recorder = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [shortcutLabel, setShortcutLabel] = useState('');
-  // "Record ⌘ as Ctrl": offered and pre-checked only while the remap is active
+  // "Record ⌘ as Ctrl": offered only while the remap is active (pre-checked unless split)
   const [recordAsCtrl, setRecordAsCtrl] = useState(false);
 
   const inputRef = useRef<InputRef | null>(null);
@@ -89,7 +89,8 @@ export const Recorder = ({
   }, [isFocused, recordAsCtrl]);
 
   function openModal() {
-    setRecordAsCtrl(remapActive);
+    // split mode sends ⌘ + most keys as Win, so ⌘ records as Win by default
+    setRecordAsCtrl(remapActive && !remapConfig.cmdSplit);
     setIsModalOpen(true);
   }
 

@@ -26,7 +26,12 @@ const ctxOf = (
   active: boolean,
   cfg: Partial<KeyboardRemapConfig> = {},
   hostActions: HostAction[] = []
-): RemapContext => ({ cfg: { ...DEFAULT_REMAP_CONFIG, ...cfg }, active, hostActions });
+): RemapContext => ({
+  // v1 (all ⌘ → Ctrl) unless a test asks for the split
+  cfg: { ...DEFAULT_REMAP_CONFIG, cmdSplit: false, ...cfg },
+  active,
+  hostActions
+});
 
 const ON = ctxOf(true);
 const OFF = ctxOf(false);
@@ -955,6 +960,121 @@ describe('misc', () => {
   });
 });
 
+describe('active: ⌘ split (listed keys → Ctrl, others → Win)', () => {
+  const SPLIT = ctxOf(true, { cmdSplit: true, ctrlKeys: 'ACFVXZ' });
+
+  it('⌘ down sends nothing; ⌘C is Ctrl+C, then nothing held', () => {
+    const s = new Session('macOS', SPLIT);
+    expect(s.run(down('MetaLeft', { meta: true }, 0))).toEqual([]);
+    expect(s.run(down('KeyC', { meta: true }, 10))).toEqual(['+ControlLeft', '+KeyC', '~KeyC@50']);
+    expect(s.run(timer('KeyC', 60))).toEqual(['-KeyC', '-ControlLeft']);
+    expect(s.run(up('MetaLeft', {}, 500))).toEqual([]);
+    expect(s.state.keys.size).toBe(0);
+    expect(s.state.wireMods.size).toBe(0);
+  });
+
+  it('⌘⇧S is Win+Shift+S (screenshot), no Win tap on ⌘ up', () => {
+    const s = new Session('macOS', SPLIT);
+    expect(
+      s.runAll([
+        down('MetaLeft', { meta: true }, 0),
+        down('ShiftLeft', { meta: true, shift: true }, 5)
+      ])
+    ).toEqual(['+ShiftLeft']);
+    expect(s.run(down('KeyS', { meta: true, shift: true }, 10))).toEqual([
+      '+MetaLeft',
+      '+KeyS',
+      '~KeyS@50'
+    ]);
+    expect(s.run(timer('KeyS', 60))).toEqual(['-KeyS', '-MetaLeft']);
+    expect(s.run(up('ShiftLeft', { meta: true }, 80))).toEqual(['-ShiftLeft']);
+    expect(s.run(up('MetaLeft', {}, 90))).toEqual([]);
+  });
+
+  it('⌘⇧F keeps Shift and uses Ctrl (listed key)', () => {
+    const s = new Session('macOS', SPLIT);
+    s.runAll([
+      down('MetaLeft', { meta: true }, 0),
+      down('ShiftLeft', { meta: true, shift: true }, 5)
+    ]);
+    expect(s.run(down('KeyF', { meta: true, shift: true }, 10))).toEqual([
+      '+ControlLeft',
+      '+KeyF',
+      '~KeyF@50'
+    ]);
+  });
+
+  it('⌘ alone is a Win tap', () => {
+    const s = new Session('macOS', SPLIT);
+    s.run(down('MetaLeft', { meta: true }, 0));
+    expect(s.run(up('MetaLeft', {}, 100))).toEqual(['+MetaLeft', '-MetaLeft']);
+    expect(
+      forkReports('macOS', SPLIT, [down('MetaLeft', { meta: true }, 0), up('MetaLeft', {}, 100)])
+    ).toEqual([R(0x08), R(0)]);
+  });
+
+  it('switches between Ctrl and Win while ⌘ stays held (⌘C then ⌘R)', () => {
+    const s = new Session('macOS', SPLIT);
+    s.runAll([down('MetaLeft', { meta: true }, 0), down('KeyC', { meta: true }, 10)]);
+    // R before C's tap ends: C goes up first, the modifiers swap (presses
+    // before releases, as everywhere in reconcile), then R
+    expect(s.run(down('KeyR', { meta: true }, 20))).toEqual([
+      '-KeyC',
+      'xKeyC',
+      '+MetaLeft',
+      '-ControlLeft',
+      '+KeyR',
+      '~KeyR@50'
+    ]);
+    expect(s.run(timer('KeyR', 70))).toEqual(['-KeyR', '-MetaLeft']);
+    expect(s.run(up('MetaLeft', {}, 80))).toEqual([]);
+    expect(s.state.wireMods.size).toBe(0);
+  });
+
+  it('honours a custom key list and digits', () => {
+    const s = new Session('macOS', ctxOf(true, { cmdSplit: true, ctrlKeys: 'S1' }));
+    s.run(down('MetaLeft', { meta: true }, 0));
+    expect(s.run(down('KeyS', { meta: true }, 10))[0]).toBe('+ControlLeft');
+    s.run(timer('KeyS', 60));
+    expect(s.run(down('Digit1', { meta: true }, 70))[0]).toBe('+ControlLeft');
+    s.run(timer('Digit1', 120));
+    expect(s.run(down('KeyC', { meta: true }, 130))[0]).toBe('+MetaLeft');
+  });
+
+  it('cmdArrows still win over the split (⌘← = Home)', () => {
+    const s = new Session('macOS', SPLIT);
+    s.run(down('MetaLeft', { meta: true }, 0));
+    expect(s.run(down('ArrowLeft', { meta: true }, 10))).toEqual(['+Home', '~ArrowLeft@50']);
+  });
+
+  it('host action ⌘⇧V still fires and suppresses the Win tap', () => {
+    const s = new Session(
+      'macOS',
+      ctxOf(true, { cmdSplit: true }, [
+        {
+          id: 'paste-host-clipboard',
+          chord: { code: 'KeyV', meta: true, shift: true },
+          enabled: true
+        }
+      ])
+    );
+    s.runAll([
+      down('MetaLeft', { meta: true }, 0),
+      down('ShiftLeft', { meta: true, shift: true }, 5)
+    ]);
+    expect(s.run(down('KeyV', { meta: true, shift: true }, 10))).toContain(
+      'host:paste-host-clipboard'
+    );
+    s.run(up('ShiftLeft', { meta: true }, 20));
+    expect(s.run(up('MetaLeft', {}, 30))).toEqual([]);
+  });
+
+  it('inactive (Windows host) never splits', () => {
+    const s = new Session('Windows', ctxOf(false, { cmdSplit: true }));
+    expect(s.run(down('MetaLeft', { meta: true }, 0))).toEqual(['+MetaLeft']);
+  });
+});
+
 describe('invariants under arbitrary event streams', () => {
   const CODES = [
     'MetaLeft',
@@ -1062,6 +1182,10 @@ describe('invariants under arbitrary event streams', () => {
       fuzz(hostOS, ctxOf(active, { jisEisuKana: true }), seed);
     }
   );
+
+  it.each([11, 12, 13])('holds in ⌘ split mode (seed %s)', (seed) => {
+    fuzz('macOS', ctxOf(true, { cmdSplit: true, ctrlKeys: 'C', jisEisuKana: true }), seed);
+  });
 
   it('holds with minPressMs=0 and repeatUnderMeta=false as well', () => {
     fuzz('macOS', ctxOf(true, { minPressMs: 0, repeatUnderMeta: false }), 7);

@@ -46,7 +46,8 @@ function makeHarness(
   const hints: string[] = [];
   const errors: unknown[] = [];
   const context: RemapContext = {
-    cfg: { ...DEFAULT_REMAP_CONFIG, ...opts.cfg },
+    // v1 (all ⌘ → Ctrl) unless a test asks for the split
+    cfg: { ...DEFAULT_REMAP_CONFIG, cmdSplit: false, ...opts.cfg },
     active: opts.active ?? true,
     hostActions: opts.hostActions ?? []
   };

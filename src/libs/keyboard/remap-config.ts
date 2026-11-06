@@ -19,6 +19,13 @@ export interface KeyboardRemapConfig {
   minPressMs: number;
   /** Host autorepeat under ⌘ re-taps once the previous tap finished. */
   repeatUnderMeta: boolean;
+  /**
+   * ⌘ split: ⌘ + one of `ctrlKeys` is sent as Ctrl, ⌘ + any other key as Win,
+   * ⌘ alone as a Win tap. false = every ⌘ is Ctrl (v1 behaviour).
+   */
+  cmdSplit: boolean;
+  /** Keys (A–Z, 0–9) that ⌘ sends as Ctrl in split mode, e.g. "ACFVXZ". */
+  ctrlKeys: string;
 }
 
 export const DEFAULT_REMAP_CONFIG: KeyboardRemapConfig = {
@@ -29,8 +36,31 @@ export const DEFAULT_REMAP_CONFIG: KeyboardRemapConfig = {
   macCapsLockFix: true,
   tapReleaseMs: 50,
   minPressMs: 30,
-  repeatUnderMeta: true
+  repeatUnderMeta: true,
+  cmdSplit: true,
+  ctrlKeys: 'ACFVXZ'
 };
+
+/** Uppercase A–Z / 0–9 only, each once, in input order. */
+export function normalizeCtrlKeys(value: string): string {
+  let out = '';
+  for (const ch of value.toUpperCase()) {
+    if (/^[A-Z0-9]$/.test(ch) && !out.includes(ch)) out += ch;
+  }
+  return out;
+}
+
+/** Physical key code → its ctrlKeys character (KeyC → 'C', Digit1 → '1'), or null. */
+function ctrlKeyChar(code: string): string | null {
+  const m = /^(?:Key([A-Z])|Digit([0-9]))$/.exec(code);
+  return m ? (m[1] ?? m[2]) : null;
+}
+
+/** Split mode: does ⌘ + this physical key go out as Ctrl? */
+export function isCtrlKey(cfg: KeyboardRemapConfig, code: string): boolean {
+  const ch = ctrlKeyChar(code);
+  return ch !== null && cfg.ctrlKeys.includes(ch);
+}
 
 export const TAP_RELEASE_MS_RANGE = { min: 20, max: 200 } as const;
 export const MIN_PRESS_MS_RANGE = { min: 0, max: 100 } as const;
@@ -81,7 +111,9 @@ export function normalizeRemapConfig(raw: unknown): KeyboardRemapConfig {
       MIN_PRESS_MS_RANGE.min,
       MIN_PRESS_MS_RANGE.max
     ),
-    repeatUnderMeta: pickBoolean(o.repeatUnderMeta, d.repeatUnderMeta)
+    repeatUnderMeta: pickBoolean(o.repeatUnderMeta, d.repeatUnderMeta),
+    cmdSplit: pickBoolean(o.cmdSplit, d.cmdSplit),
+    ctrlKeys: typeof o.ctrlKeys === 'string' ? normalizeCtrlKeys(o.ctrlKeys) : d.ctrlKeys
   };
 }
 

@@ -69,7 +69,10 @@ const en = {
       remap: {
         title: '⌘ key mapping (Mac)',
         off: 'Off (send ⌘ as Win)',
-        on: 'On (⌘ → Ctrl)',
+        on: 'On (⌘ → Ctrl / Win)',
+        split: 'Only listed keys: ⌘ → Ctrl; any other ⌘ is Win (⌘ alone = Win)',
+        ctrlKeys: 'Keys sent with Ctrl',
+        ctrlKeysHint: 'Letters/digits, e.g. ACFVXZ. Turn off to send every ⌘ as Ctrl',
         inactiveMacTarget: 'Disabled: target OS is macOS',
         nav: 'Also convert Mac navigation (⌘←/→, ⌥←/→, ⌘⇧[ ])',
         jis: '英数/かな → 無変換/変換 (MS-IME with IME-off/on assigned)',
@@ -79,7 +82,7 @@ const en = {
         helpFullscreen: 'Work only in full screen',
         helpNever: 'Everything else (⌘Tab, ⌘Space, ⌘Q…): use Shortcuts',
         sideEffects:
-          'With ⌘ → Ctrl on: ⌘-click = Ctrl+click, ⌘+wheel = Ctrl+wheel (zoom) on the target',
+          'Split off: ⌘-click = Ctrl+click, ⌘+wheel = Ctrl+wheel (zoom). Split on: ⌘ is only sent together with a key (⌘⇧S = Win+Shift+S, …)',
         enterFullscreen: 'Enter full screen',
         keyTest: 'Key test',
         keyTestHint: 'Keys are NOT sent while this is open',

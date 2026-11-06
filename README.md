@@ -13,7 +13,7 @@ operating a Windows machine through a NanoKVM-USB. It adds three things on top o
 
 | Feature                                                                                                                                                                                                                                                                      | Where                                                    | Default                                                                           |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| **⌘ key mapping** — ⌘ is sent as Ctrl (⌘C/⌘V/⌘F… arrive as Ctrl+C/V/F), plus Mac navigation rules (⌘←/→ → Home/End, ⌥←/→ → Ctrl+←/→, ⌘⇧[ ] → Ctrl+Shift+Tab / Ctrl+Tab)                                                                                                      | Keyboard menu → _⌘ key mapping (Mac)_ (macOS hosts only) | **On** while the host is macOS and the Target OS is not macOS                     |
+| **⌘ key mapping** — ⌘ + C/V/A/F/X/Z (configurable) is sent as Ctrl, ⌘ + any other key as Win (⌘⇧S = Win+Shift+S), ⌘ alone = Win; split off = every ⌘ is Ctrl; plus Mac navigation rules (⌘←/→ → Home/End, ⌥←/→ → Ctrl+←/→, ⌘⇧[ ] → Ctrl+Shift+Tab / Ctrl+Tab)                | Keyboard menu → _⌘ key mapping (Mac)_ (macOS hosts only) | **On** while the host is macOS and the Target OS is not macOS                     |
 | **Trackpad / scroll fidelity** — proportional two-finger scrolling with a _Scroll sensitivity_ slider, pointer capture in absolute mode (no stuck buttons), a _Pointer speed_ gain in relative mode, in-flight coalescing of mouse moves                                     | Mouse menu → _Wheel speed_ / _Pointer speed_             | 100 px per notch, gain ×1.00                                                      |
 | **Host clipboard → keystrokes** — one click (or ⌘⇧V) types the Mac clipboard on the target with the US or JIS key table, progress pill, cancel on any host key or click; Japanese and other non-ASCII text goes through the target browser (Windows) or Ctrl+Shift+U (Linux) | Keyboard menu → _Paste host clipboard_ (gear = settings) | Normal speed (20 ms / 20 ms), Enter, non-ASCII _Auto_, ⌘⇧V enabled on macOS hosts |
 
@@ -179,7 +179,7 @@ lock-state query are not.
 
 ## Behaviour changes versus upstream (for users who touch no setting)
 
-- **macOS hosts: ⌘ is sent as Ctrl by default** (upstream: ⌘ = Win). Turn it _Off_ in
+- **macOS hosts: ⌘ + C/V/A/F/X/Z is sent as Ctrl by default, other ⌘ chords as Win** (upstream: ⌘ = Win). Turn it _Off_ in
   Keyboard → ⌘ key mapping to get upstream's keyboard bytes exactly; it is also inactive while the
   Target OS is set to macOS. While it is active and serial is connected, closing or reloading the
   tab asks for confirmation (⌘W / ⌘Q are Chrome-reserved and would end the session silently).

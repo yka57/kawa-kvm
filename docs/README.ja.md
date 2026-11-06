@@ -6,7 +6,7 @@ Mac（MacBook のトラックパッド、日本語環境、Chrome）から NanoK
 
 | 機能                                                                                                                                                                                                                       | 場所                                                          | 既定値                                                      |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------- |
-| **⌘ キー変換** — ⌘ を Ctrl として送信（⌘C/⌘V/⌘F が Ctrl+C/V/F になる）＋ Mac 風ナビゲーション                                                                                                                              | キーボード → ⌘ キー変換（Mac）                                | **オン**（Mac ホストかつ操作先 OS が macOS 以外のとき有効） |
+| **⌘ キー変換** — ⌘C/V/A/F/X/Z は Ctrl、それ以外の ⌘ は Win として送信（⌘⇧S = Win+Shift+S）＋ Mac 風ナビゲーション                                                                                                          | キーボード → ⌘ キー変換（Mac）                                | **オン**（Mac ホストかつ操作先 OS が macOS 以外のとき有効） |
 | **トラックパッド / スクロール** — 2 本指スクロールを移動量に比例させる、ボタンが押しっぱなしにならない絶対座標、相対座標のポインター速度                                                                                   | マウス → ホイール速度 / ポインター速度                        | スクロール感度 100 px/ノッチ、ポインター速度 ×1.00          |
 | **クリップボードを入力** — Mac のクリップボードを操作先にキー入力として打ち込む（US / JIS 配列対応、ASCII 以外（日本語など）を含むテキストは Windows ではブラウザー経由・Linux では Ctrl+Shift+U、進捗表示、いつでも中断） | キーボード → クリップボードを入力（⚙ = 設定）、ホットキー ⌘⇧V | 速度「標準」、改行 = Enter、日本語など = 自動、⌘⇧V 有効     |
 
@@ -56,7 +56,9 @@ Mac ホストでのみ表示されます。有効になる条件は「ホスト�
 
 **オン時の動作**
 
-- 左右の ⌘ → 左右の Ctrl。⌃ は Ctrl のまま、⌥ は Alt のまま。⌘ の単押しは Ctrl の単押しになります（無害）。
+- **振り分け（既定オン）**: ⌘ を押しただけでは何も送らず、一緒に押したキーで決めます。「Ctrl にするキー」（既定 `ACFVXZ`、英字・数字を並べて変更可）なら Ctrl＋キー、それ以外は Win＋キー（⌘⇧S = Win+Shift+S のスクショ、⌘R = Win+R など）。⌘ だけを押して離すと Win の単押し（スタートメニュー）。⌘L は Win+L（画面ロック）になるので注意。振り分けオン時は ⌘クリック・⌘＋ホイールに修飾キーは付きません。
+- 振り分けをオフにすると v1 と同じく、左右の ⌘ → 左右の Ctrl（⌘ の単押しは Ctrl の単押し）。
+- ⌃ は Ctrl のまま、⌥ は Alt のまま。
 - ⌘ を押している間に押したキーは **短いタップ**（押下 → 50 ms 後に自動で離す）として送られます。macOS の Chrome は ⌘ 押下中の keyup を届けないため、押しっぱなし（Ctrl+V の連打）を防ぐ仕組みです。キーを押し続けるとホストのオートリピートで再タップされるので、⌘V を 2 秒押せば貼り付けが繰り返され、離すと止まります。⌘C を素早く押して離しても送られます（最短 30 ms）。
 - ⌘⇧V は（ホットキーが有効なら）操作先に送らず「クリップボードを入力」を起動します。
 
@@ -80,7 +82,7 @@ UI のない項目（`nanokvm-usb-keyboard-remap` の JSON を直接編集）: `
 
 **関連する動作**
 
-- ショートカットの記録モーダルに「⌘ を Ctrl として記録」が出ます（変換が有効なときに表示・既定でオン）。⌘⇧T を記録すると Ctrl+Shift+T として保存されます。
+- ショートカットの記録モーダルに「⌘ を Ctrl として記録」が出ます（変換が有効なときに表示。振り分けオン時は既定オフ＝ ⌘ は Win として記録、振り分けオフ時は既定オン）。⌘⇧T を記録すると Ctrl+Shift+T として保存されます。
 - 「全キーを離す」行: キーボードの全キーとマウスの全ボタンを離すレポートを送ります（何かが押しっぱなしになったとき用）。
 - 変換が有効でシリアル接続中は、タブを閉じる・再読み込みすると確認ダイアログが出ます（⌘W/⌘Q は Chrome が先に処理するため、うっかり閉じないように）。
 - 変換は物理キーボードの経路だけに効きます。仮想キーボードとショートカットは記録されたコードをそのまま送ります（Win は Win のまま）。
@@ -252,7 +254,7 @@ Windows では、打てない文字が 1 文字でもあれば、ASCII の部分
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `nanokvm-usb-target-os`                 | `windows` / `linux` / `macos`                                                                                                                        | `windows`                                                                                                                                                                                                                                                     | キーボード → 操作先 OS                                                             |
 | `nanokvm-usb-target-layout`             | `us` / `jis`                                                                                                                                         | UI が日本語なら `jis`、それ以外 `us`                                                                                                                                                                                                                          | キーボード → 操作先のキー配列、貼り付けの設定                                      |
-| `nanokvm-usb-keyboard-remap`            | JSON `{version:1, enabled, navRules, jisEisuKana, macCapsLockFix, tapReleaseMs, minPressMs, repeatUnderMeta}`                                        | `enabled:true, navRules:true, jisEisuKana:false, macCapsLockFix:true, tapReleaseMs:50, minPressMs:30, repeatUnderMeta:true`                                                                                                                                   | キーボード → ⌘ キー変換（数値 2 つと repeatUnderMeta は UI なし）                  |
+| `nanokvm-usb-keyboard-remap`            | JSON `{version:1, enabled, navRules, jisEisuKana, macCapsLockFix, tapReleaseMs, minPressMs, repeatUnderMeta, cmdSplit, ctrlKeys}`                    | `enabled:true, navRules:true, jisEisuKana:false, macCapsLockFix:true, tapReleaseMs:50, minPressMs:30, repeatUnderMeta:true, cmdSplit:true, ctrlKeys:"ACFVXZ"`                                                                                                 | キーボード → ⌘ キー変換（数値 2 つと repeatUnderMeta は UI なし）                  |
 | `nanokvm-usb-mouse-scroll-px-per-notch` | 1 ノッチあたりの px（20〜400）                                                                                                                       | `100`                                                                                                                                                                                                                                                         | マウス → ホイール速度 → スクロール感度（スライダーは 40〜400 px）                  |
 | `nanokvm-usb-mouse-sensitivity`         | 相対座標の倍率（0.25〜4）                                                                                                                            | `1`                                                                                                                                                                                                                                                           | マウス → ポインター速度（相対座標モードのみ）                                      |
 | `nanokvm-usb-paste-settings`            | JSON `{version:2, speed, newline, normalizePunct, stripTrailingNewline, imePreKey, unicodeMethod, bridgeWindow, fixCapsLock, hotkeyEnabled, hotkey}` | `speed:'normal', newline:'enter', normalizePunct:true, stripTrailingNewline:true, imePreKey:'auto', unicodeMethod:'auto', bridgeWindow:'chromium-private', fixCapsLock:true, hotkeyEnabled: Mac ホストなら true, hotkey:{code:'KeyV', meta:true, shift:true}` | 貼り付けの設定                                                                     |
@@ -265,7 +267,7 @@ upstream のキー（意味・形式とも変更なし）: `nanokvm-usb-language
 
 ## 副作用
 
-- ⌘ キー変換がオンのとき、⌘ を押しながらのクリックは操作先では Ctrl+クリック、⌘＋ホイールは Ctrl+ホイール（ズーム）になります。⌃クリックは右クリックにはなりません。
+- ⌘ キー変換がオンで振り分けがオフのとき、⌘ を押しながらのクリックは操作先では Ctrl+クリック、⌘＋ホイールは Ctrl+ホイール（ズーム）になります。⌃クリックは右クリックにはなりません。
 - 同じ条件でシリアル接続中は、タブを閉じる・再読み込み・戻るで「このサイトを離れますか？」の確認が出ます。
 - 右 ⌘ も Ctrl になるため、Win キー単体はショートカットの「Win」行から送ります。
 - 英数/かな の変換をオンにすると、押したキーはホスト側の IME も切り替えます（ホストと操作先が揃うので実害はありません）。

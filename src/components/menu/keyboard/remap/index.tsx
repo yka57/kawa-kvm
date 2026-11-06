@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Checkbox, Divider, Popover } from 'antd';
+import { Checkbox, Divider, Input, Popover } from 'antd';
 import clsx from 'clsx';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { ArrowLeftRightIcon, CircleHelpIcon } from 'lucide-react';
@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 
 import { keyboardRemapAtom, keyboardRemapRawAtom } from '@/jotai/keyboard.ts';
 import { targetOsAtom } from '@/jotai/target.ts';
-import type { KeyboardRemapConfig } from '@/libs/keyboard/remap-config';
+import { normalizeCtrlKeys, type KeyboardRemapConfig } from '@/libs/keyboard/remap-config';
 import * as storage from '@/libs/storage';
 
 import { RemapHelp } from './help.tsx';
@@ -20,6 +20,8 @@ export const Remap = () => {
   const targetOs = useAtomValue(targetOsAtom);
 
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  // the text field keeps what is typed; the stored value is the normalised list
+  const [ctrlKeysDraft, setCtrlKeysDraft] = useState<string | null>(null);
 
   // the remap never applies to a macOS target, whatever the toggle says
   const isMacTarget = targetOs === 'macos';
@@ -68,6 +70,39 @@ export const Remap = () => {
           {t('keyboard.remap.inactiveMacTarget')}
         </div>
       )}
+
+      <Divider style={{ margin: '5px 0 5px 0' }} />
+
+      <div className="flex flex-col space-y-1 px-2 py-1">
+        <Checkbox
+          checked={config.cmdSplit}
+          disabled={!config.enabled || isMacTarget}
+          onChange={(e) => update({ cmdSplit: e.target.checked })}
+        >
+          {t('keyboard.remap.split')}
+        </Checkbox>
+        {config.cmdSplit && (
+          <div className="pl-6">
+            <div className="flex items-center space-x-2">
+              <span className="whitespace-nowrap text-neutral-300">
+                {t('keyboard.remap.ctrlKeys')}
+              </span>
+              <Input
+                size="small"
+                className="font-mono"
+                value={ctrlKeysDraft ?? config.ctrlKeys}
+                disabled={!config.enabled || isMacTarget}
+                onChange={(e) => {
+                  setCtrlKeysDraft(e.target.value);
+                  update({ ctrlKeys: normalizeCtrlKeys(e.target.value) });
+                }}
+                onBlur={() => setCtrlKeysDraft(null)}
+              />
+            </div>
+            <div className="pt-1 text-xs text-neutral-500">{t('keyboard.remap.ctrlKeysHint')}</div>
+          </div>
+        )}
+      </div>
 
       <Divider style={{ margin: '5px 0 5px 0' }} />
 
