@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import * as storage from '@/libs/storage';
 
-import { DEFAULT_SHORTCUTS } from './defaults.ts';
+import { shortcutId, visibleDefaults } from './defaults.ts';
 import { Recorder } from './recorder.tsx';
 import { Shortcut } from './shortcut.tsx';
 import type { Shortcut as ShortcutInterface } from './types.ts';
@@ -17,6 +17,11 @@ export const Shortcuts = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [customShortcuts, setCustomShortcuts] = useState<ShortcutInterface[]>([]);
+
+  const [hiddenDefaults, setHiddenDefaults] = useState<string[]>(() =>
+    storage.getHiddenDefaultShortcuts()
+  );
+  const defaultShortcuts = visibleDefaults(hiddenDefaults);
 
   useEffect(() => {
     const shortcuts = storage.getShortcuts();
@@ -34,6 +39,14 @@ export const Shortcuts = () => {
     const shortcuts = customShortcuts.filter((_, i) => i !== index);
     setCustomShortcuts(shortcuts);
     storage.setShortcuts(JSON.stringify(shortcuts));
+  }
+
+  function setDefaultVisible(shortcut: ShortcutInterface, visible: boolean): void {
+    const id = shortcutId(shortcut);
+    const hidden = hiddenDefaults.filter((other) => other !== id);
+    if (!visible) hidden.push(id);
+    setHiddenDefaults(hidden);
+    storage.setHiddenDefaultShortcuts(hidden);
   }
 
   function handleOpenChange(open: boolean): void {
@@ -60,17 +73,23 @@ export const Shortcuts = () => {
         </>
       )}
 
-      {/*  default shortcuts */}
-      {DEFAULT_SHORTCUTS.map((shortcut, index) => (
-        <Shortcut key={index} shortcut={shortcut}></Shortcut>
-      ))}
+      {/*  default shortcuts (the user can hide each one in the recorder modal) */}
+      {defaultShortcuts.length > 0 && (
+        <>
+          {defaultShortcuts.map((shortcut) => (
+            <Shortcut key={shortcutId(shortcut)} shortcut={shortcut}></Shortcut>
+          ))}
 
-      <Divider style={{ margin: '5px 0 5px 0' }} />
+          <Divider style={{ margin: '5px 0 5px 0' }} />
+        </>
+      )}
 
       <Recorder
         shortcuts={customShortcuts}
         addShortcut={addShortcut}
         delShortcut={delShortcut}
+        hiddenDefaults={hiddenDefaults}
+        setDefaultVisible={setDefaultVisible}
         setIsRecording={setIsRecording}
       />
     </ScrollArea>

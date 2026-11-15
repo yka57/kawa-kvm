@@ -173,6 +173,7 @@ const MOUSE_SENSITIVITY_KEY = 'nanokvm-usb-mouse-sensitivity';
 const PASTE_SETTINGS_KEY = 'nanokvm-usb-paste-settings';
 const PASTE_BRIDGE_INTRO_KEY = 'nanokvm-usb-paste-bridge-intro';
 const DEBUG_HID_KEY = 'nanokvm-usb-debug-hid';
+const HIDDEN_DEFAULT_SHORTCUTS_KEY = 'nanokvm-usb-hidden-default-shortcuts';
 
 interface NumberRange {
   min: number;
@@ -349,4 +350,21 @@ export function setDebugHid(enabled: boolean): void {
   } else {
     removeItem(DEBUG_HID_KEY);
   }
+}
+
+/** Ids (see `shortcutId`) of built-in shortcuts hidden from the Shortcuts menu. */
+export function getHiddenDefaultShortcuts(): string[] {
+  const raw = readItem(HIDDEN_DEFAULT_SHORTCUTS_KEY);
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id): id is string => typeof id === 'string');
+  } catch {
+    return [];
+  }
+}
+
+export function setHiddenDefaultShortcuts(ids: readonly string[]): void {
+  writeItem(HIDDEN_DEFAULT_SHORTCUTS_KEY, JSON.stringify([...ids]));
 }

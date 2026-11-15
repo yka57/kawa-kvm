@@ -59,6 +59,7 @@ const ja = {
       shortcut: {
         title: 'ショートカット',
         custom: 'カスタム',
+        defaults: '標準のショートカット（チェックを外すとメニューに表示しません）',
         capture: 'ここをクリックしてショートカットを記録',
         clear: 'クリア',
         save: '保存',

@@ -59,6 +59,7 @@ const en = {
       shortcut: {
         title: 'Shortcuts',
         custom: 'Custom',
+        defaults: 'Built-in shortcuts (untick to hide from the menu)',
         capture: 'Click here to capture shortcut',
         clear: 'Clear',
         save: 'Save',

@@ -12,6 +12,7 @@ import { getOperatingSystem } from '@/libs/browser';
 import { toggleFullscreenWithKeyboardLock } from '@/libs/browser/fullscreen';
 import { isRemapActive } from '@/libs/keyboard/remap-config';
 
+import { DEFAULT_SHORTCUTS, shortcutId } from './defaults.ts';
 import { toRecordedKey } from './record-key.ts';
 import { KeyInfo, Shortcut } from './types.ts';
 
@@ -21,6 +22,8 @@ interface RecorderProps {
   shortcuts: Shortcut[];
   addShortcut: (shortcut: Shortcut) => void;
   delShortcut: (index: number) => void;
+  hiddenDefaults: string[];
+  setDefaultVisible: (shortcut: Shortcut, visible: boolean) => void;
   setIsRecording: (isRecording: boolean) => void;
 }
 
@@ -28,6 +31,8 @@ export const Recorder = ({
   shortcuts,
   addShortcut,
   delShortcut,
+  hiddenDefaults,
+  setDefaultVisible,
   setIsRecording
 }: RecorderProps) => {
   const { t } = useTranslation();
@@ -198,6 +203,29 @@ export const Recorder = ({
             </ScrollArea>
           </>
         )}
+
+        <Divider />
+
+        <div className="pb-1 text-neutral-500">{t('keyboard.shortcut.defaults')}</div>
+        {DEFAULT_SHORTCUTS.map((shortcut) => {
+          const id = shortcutId(shortcut);
+          return (
+            <div key={id} className="rounded p-2 hover:bg-neutral-700/50">
+              <Checkbox
+                checked={!hiddenDefaults.includes(id)}
+                onChange={(e) => setDefaultVisible(shortcut, e.target.checked)}
+              >
+                <span className="flex items-center space-x-1">
+                  {shortcut.keys.map((key, index) => (
+                    <KbdGroup key={index}>
+                      <Kbd>{key.label}</Kbd>
+                    </KbdGroup>
+                  ))}
+                </span>
+              </Checkbox>
+            </div>
+          );
+        })}
       </Modal>
     </>
   );

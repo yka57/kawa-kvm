@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { getKeycode, isModifier } from '@/libs/keyboard/keymap.ts';
 
-import { DEFAULT_SHORTCUTS } from './defaults.ts';
+import { DEFAULT_SHORTCUTS, shortcutId, visibleDefaults } from './defaults.ts';
 
 describe('DEFAULT_SHORTCUTS', () => {
   it('matches the shipped list (upstream pair first, then Alt+Tab, Ctrl+Shift+Esc, Win)', () => {
@@ -47,5 +47,21 @@ describe('DEFAULT_SHORTCUTS', () => {
         expect(isModifier(key.code) || getKeycode(key.code) !== undefined, key.code).toBe(true);
       }
     }
+  });
+});
+
+describe('hiding defaults', () => {
+  it('ids are unique and built from the HID codes', () => {
+    const ids = DEFAULT_SHORTCUTS.map(shortcutId);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids[0]).toBe('MetaLeft+Tab');
+  });
+
+  it('visibleDefaults drops hidden ids, keeps order, ignores unknown ids', () => {
+    expect(visibleDefaults([])).toEqual(DEFAULT_SHORTCUTS);
+    expect(visibleDefaults(['MetaLeft+Tab', 'nope']).map(shortcutId)).toEqual(
+      DEFAULT_SHORTCUTS.slice(1).map(shortcutId)
+    );
+    expect(visibleDefaults(DEFAULT_SHORTCUTS.map(shortcutId))).toEqual([]);
   });
 });
