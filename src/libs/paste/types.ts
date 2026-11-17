@@ -27,6 +27,11 @@ export interface KeyStroke {
   /** Index of the originating grapheme in the segmented text; -1 when there is none (ime-pre, bridge keys). */
   src: number;
   tag: StrokeTag;
+  /**
+   * Modifier bitmap that stays down after `key` is released (the release
+   * report carries it instead of all zeros): Alt across an Alt+numpad entry.
+   */
+  hold?: number;
   /** Extra pause after this stroke's gap, for the target to settle (IME switch, input method, clipboard). */
   afterMs?: number;
   /**

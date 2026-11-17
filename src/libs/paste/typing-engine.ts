@@ -170,6 +170,11 @@ function pressReport(stroke: KeyStroke): number[] {
   return [stroke.mod, 0, stroke.key, 0, 0, 0, 0, 0];
 }
 
+/** All zeros, or only the modifiers the stroke keeps down for the next one. */
+function releaseReport(stroke: KeyStroke): number[] {
+  return [stroke.hold ?? 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
 /**
  * Keydown interrupt rule of spec §5.2, shared with the keyboard adapter's
  * HID-lock branch so both paths agree: a run stops on a non-modifier,
@@ -361,7 +366,7 @@ export class TypingEngine {
     }
   }
 
-  /** Press, hold, release (all-zero), then the gap; no gap after the program's last stroke. */
+  /** Press, hold, release (all-zero, or the stroke's held modifiers), then the gap; no gap after the program's last stroke. */
   private async runKeys(strokes: readonly KeyStroke[], run: RunContext): Promise<void> {
     const { pacing } = run;
     for (let i = 0; i < strokes.length && this.stopReason === null; i++) {
@@ -374,7 +379,7 @@ export class TypingEngine {
       if (this.stopReason !== null) return;
       await this.sleep(pacing.holdMs);
       if (this.stopReason !== null) return;
-      await this.guardedSend([...ZERO_REPORT], true);
+      await this.guardedSend(releaseReport(stroke), true);
       if (this.stopReason !== null) return;
 
       run.done++;
@@ -456,7 +461,7 @@ export class TypingEngine {
       try {
         await this.guardedSend(pressReport(strokes[i]), false);
         await this.sleep(pacing.holdMs);
-        await this.guardedSend([...ZERO_REPORT], false);
+        await this.guardedSend(releaseReport(strokes[i]), false);
       } catch (error) {
         console.error('[paste] failure keys not sent', error);
         return;

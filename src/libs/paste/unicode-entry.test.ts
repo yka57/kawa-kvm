@@ -6,6 +6,8 @@ import { prepareRawText, type PlanOptions } from './plan';
 import { IME_SETTLE_MS, PASTE_HARD_LIMIT } from './text-to-keys';
 import type { KeyStroke } from './types';
 import {
+  ALT_HEX_COMMIT_SETTLE_MS,
+  altHexStrokes,
   codePointStrokes,
   compileUnicode,
   UNICODE_COMMIT_SETTLE_MS,
@@ -183,5 +185,57 @@ describe('compileUnicode', () => {
     expect(result.strokes[0].src).toBe(0);
     expect(result.strokes[1].src).toBe(2);
     expect(result.stats).toMatchObject({ chars: 3, typed: 2, skipped: 1 });
+  });
+});
+
+describe('altHexStrokes (Windows hex numpad)', () => {
+  const ALT = ModifierBits.LeftAlt;
+
+  it('あ → Alt held over keypad +, 3 0 4 2 on the keypad; Alt goes up with the last digit', () => {
+    const strokes = altHexStrokes(0x3042, 7, 3);
+    expect(names(strokes)).toEqual(['NumpadAdd', 'Numpad3', 'Numpad0', 'Numpad4', 'Numpad2']);
+    expect(strokes.every((s) => s.mod === ALT && s.group === 3 && s.src === 7)).toBe(true);
+    expect(strokes.map((s) => s.hold)).toEqual([ALT, ALT, ALT, ALT, undefined]);
+    expect(strokes[4].afterMs).toBe(ALT_HEX_COMMIT_SETTLE_MS);
+  });
+
+  it('hex letters use the letter keys (漢 = 6f22)', () => {
+    expect(names(altHexStrokes(0x6f22, 0, 0))).toEqual([
+      'NumpadAdd',
+      'Numpad6',
+      'KeyF',
+      'Numpad2',
+      'Numpad2'
+    ]);
+  });
+
+  it('a code point above U+FFFF is two entries, one per UTF-16 unit', () => {
+    const strokes = altHexStrokes(0x1f600, 0, 0); // d83d de00
+    expect(names(strokes)).toEqual([
+      'NumpadAdd',
+      'KeyD',
+      'Numpad8',
+      'Numpad3',
+      'KeyD',
+      'NumpadAdd',
+      'KeyD',
+      'KeyE',
+      'Numpad0',
+      'Numpad0'
+    ]);
+    expect(strokes.filter((s) => s.hold === undefined)).toHaveLength(2);
+  });
+
+  it("compileUnicode with method 'alt-hex' mixes direct keys and Alt entries", () => {
+    const { strokes } = compile('aあ', { method: 'alt-hex' });
+    expect(names(strokes)).toEqual([
+      'KeyA',
+      'NumpadAdd',
+      'Numpad3',
+      'Numpad0',
+      'Numpad4',
+      'Numpad2'
+    ]);
+    expect(strokes[0].hold).toBeUndefined();
   });
 });

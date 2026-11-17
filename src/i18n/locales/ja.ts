@@ -145,6 +145,16 @@ const ja = {
       unicodeAuto: '自動（Windows: ブラウザー経由 / Linux: Ctrl+Shift+U）',
       unicodeBridge: 'ブラウザー経由',
       unicodeCtrlShiftU: 'Ctrl+Shift+U（Linux）',
+      dictationBar: '音声入力バー',
+      dictationPlaceholder:
+        'ここをクリックして Mac の音声入力・日本語入力（Enter で送信、Esc でキーボードを操作先に戻す）',
+      dictationAuto: '止まったら自動で送信',
+      dictationSend: '送信（Enter）',
+      dictationClose: 'バーを閉じる',
+      dictationQueued: '送信待ち {{n}}',
+      unicodeAltHex: 'Alt＋テンキー（Windows・ウィンドウを開かない・要設定）',
+      altHexHint:
+        '操作先の Windows で一度だけ設定が必要です: レジストリ HKEY_CURRENT_USER\\Control Panel\\Input Method に文字列値 EnableHexNumpad = 1 を作り、サインインし直します。未設定のまま使うと Alt＋英字がメニュー操作として働きます。',
       unicodeSkip: '入力しない（ASCII のみ）',
       bridgeHint:
         '操作先のブラウザーで一時ウィンドウを開き、URL として打ち込んだテキストをコピーして元の欄に貼り付けます。操作先のクリップボードは上書きされます。',

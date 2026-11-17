@@ -5,6 +5,7 @@ import { KeyboardIcon } from 'lucide-react';
 import { getOperatingSystem } from '@/libs/browser';
 
 import { Paste } from './paste';
+import { DictationRow } from './paste/dictation-row.tsx';
 import { ReleaseAll } from './release-all.tsx';
 import { Remap } from './remap';
 import { Shortcuts } from './shortcuts';
@@ -21,6 +22,7 @@ export const Keyboard = () => {
   const content = (
     <div className="flex flex-col space-y-0.5">
       <Paste />
+      <DictationRow />
       <VirtualKeyboard />
       <Shortcuts />
 

@@ -16,7 +16,7 @@ export interface PlanOptions extends CompileOptions {
 
 export type PastePlan =
   | { kind: 'direct'; compiled: CompileResult }
-  /** Ctrl+Shift+U strokes (spec §5). */
+  /** Ctrl+Shift+U (spec §5) or Alt+numpad hex strokes. */
   | { kind: 'unicode'; compiled: CompileResult }
   | { kind: 'bridge'; text: string; stats: CompileStats; skipped: SkippedChar[] };
 
@@ -79,7 +79,7 @@ export function planPaste(text: string, o: PlanOptions): PastePlan {
     return { kind: 'direct', compiled };
   }
   const prepared = prepareRawText(text, o);
-  if (o.method === 'ctrl-shift-u') {
+  if (o.method === 'ctrl-shift-u' || o.method === 'alt-hex') {
     return { kind: 'unicode', compiled: compileUnicode(prepared, o) };
   }
   return { kind: 'bridge', text: prepared.text, stats: prepared.stats, skipped: prepared.skipped };

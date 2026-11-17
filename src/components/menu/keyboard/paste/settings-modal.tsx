@@ -143,6 +143,7 @@ export const PasteSettingsModal = () => {
     { value: 'auto', label: t('paste.unicodeAuto') },
     { value: 'bridge', label: t('paste.unicodeBridge') },
     { value: 'ctrl-shift-u', label: t('paste.unicodeCtrlShiftU') },
+    { value: 'alt-hex', label: t('paste.unicodeAltHex') },
     { value: 'skip', label: t('paste.unicodeSkip') }
   ];
   const bridgeWindowOptions: { value: BridgeWindow; label: string }[] = [
@@ -161,7 +162,9 @@ export const PasteSettingsModal = () => {
       ? 'paste.bridgeHint'
       : unicodeMethod === 'ctrl-shift-u'
         ? 'paste.unicodeHint'
-        : null;
+        : unicodeMethod === 'alt-hex'
+          ? 'paste.altHexHint'
+          : null;
 
   return (
     <Modal

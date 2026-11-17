@@ -58,10 +58,46 @@ export function codePointStrokes(
   return strokes;
 }
 
+/** After Alt goes up: the target commits the character. */
+export const ALT_HEX_COMMIT_SETTLE_MS = 30;
+
+/** Alt+numpad digits are read by scan code, whatever NumLock says; a–f are the letter keys. */
+function altHexDigitKey(digit: string): number {
+  return digit >= 'a' ? KeycodeMap[`Key${digit.toUpperCase()}`] : KeycodeMap[`Numpad${digit}`];
+}
+
+/**
+ * Windows hex-numpad entry (needs HKCU\Control Panel\Input Method
+ * EnableHexNumpad = "1" on the target): Alt stays down over keypad +, the
+ * UTF-16 code unit in hex, and goes up with the last digit. One atomic group.
+ */
+export function altHexUnitStrokes(unit: number, src: number, group: number): KeyStroke[] {
+  const alt = ModifierBits.LeftAlt;
+  const keys = [KeycodeMap.NumpadAdd, ...[...unit.toString(16)].map(altHexDigitKey)];
+  return keys.map((key, i) => {
+    const last = i === keys.length - 1;
+    const stroke: KeyStroke = { mod: alt, key, src, tag: 'unicode', group };
+    if (last) stroke.afterMs = ALT_HEX_COMMIT_SETTLE_MS;
+    else stroke.hold = alt;
+    return stroke;
+  });
+}
+
+/** One Alt entry per UTF-16 code unit (a surrogate pair is two entries). */
+export function altHexStrokes(cp: number, src: number, group: number): KeyStroke[] {
+  const text = String.fromCodePoint(cp);
+  const strokes: KeyStroke[] = [];
+  for (let i = 0; i < text.length; i++) {
+    strokes.push(...altHexUnitStrokes(text.charCodeAt(i), src, group));
+  }
+  return strokes;
+}
+
 /**
  * Optional IME pre-key, then per grapheme: "\n" → Enter (newline mode),
  * "\t" → Tab, a layout-table hit → its direct stroke, anything else → one
- * Ctrl+Shift+U group per code point. `typed` counts graphemes.
+ * group per code point: Ctrl+Shift+U, or Alt+numpad hex for 'alt-hex'.
+ * `typed` counts graphemes.
  */
 export function compileUnicode(prepared: PreparedText, o: PlanOptions): CompileResult {
   const table = getTable(o.layout);
@@ -80,7 +116,12 @@ export function compileUnicode(prepared: PreparedText, o: PlanOptions): CompileR
       strokes.push(stroke);
     } else {
       for (const ch of grapheme) {
-        strokes.push(...codePointStrokes(ch.codePointAt(0) ?? 0, src, group, group === 0));
+        const cp = ch.codePointAt(0) ?? 0;
+        strokes.push(
+          ...(o.method === 'alt-hex'
+            ? altHexStrokes(cp, src, group)
+            : codePointStrokes(cp, src, group, group === 0))
+        );
         group++;
       }
     }

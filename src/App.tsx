@@ -10,6 +10,7 @@ import { DeviceModal } from '@/components/device-modal';
 import { Keyboard } from '@/components/keyboard';
 import { Menu } from '@/components/menu';
 import { pasteController } from '@/components/menu/keyboard/paste/controller';
+import { DictationBar } from '@/components/menu/keyboard/paste/dictation-bar';
 import { PasteProgressPill } from '@/components/menu/keyboard/paste/progress-pill';
 import { PasteSettingsModal } from '@/components/menu/keyboard/paste/settings-modal';
 import { Mouse } from '@/components/mouse';
@@ -197,6 +198,7 @@ const App = () => {
 
       <VirtualKeyboard isBigScreen={isBigScreen} />
       <PasteProgressPill />
+      <DictationBar />
       <PasteSettingsModal />
       <HidLogOverlay />
     </>

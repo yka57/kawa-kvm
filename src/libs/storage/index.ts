@@ -173,6 +173,7 @@ const MOUSE_SENSITIVITY_KEY = 'nanokvm-usb-mouse-sensitivity';
 const PASTE_SETTINGS_KEY = 'nanokvm-usb-paste-settings';
 const PASTE_BRIDGE_INTRO_KEY = 'nanokvm-usb-paste-bridge-intro';
 const DEBUG_HID_KEY = 'nanokvm-usb-debug-hid';
+const DICTATION_BAR_KEY = 'nanokvm-usb-dictation-bar';
 const HIDDEN_DEFAULT_SHORTCUTS_KEY = 'nanokvm-usb-hidden-default-shortcuts';
 
 interface NumberRange {
@@ -367,4 +368,31 @@ export function getHiddenDefaultShortcuts(): string[] {
 
 export function setHiddenDefaultShortcuts(ids: readonly string[]): void {
   writeItem(HIDDEN_DEFAULT_SHORTCUTS_KEY, JSON.stringify([...ids]));
+}
+
+/** Dictation bar: shown or not, and whether it sends by itself after a pause. */
+export interface DictationBarState {
+  open: boolean;
+  autoSend: boolean;
+}
+
+export function getDictationBar(): DictationBarState {
+  const fallback: DictationBarState = { open: false, autoSend: true };
+  const raw = readItem(DICTATION_BAR_KEY);
+  if (raw === null) return fallback;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback;
+    const o = parsed as Record<string, unknown>;
+    return {
+      open: typeof o.open === 'boolean' ? o.open : fallback.open,
+      autoSend: typeof o.autoSend === 'boolean' ? o.autoSend : fallback.autoSend
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export function setDictationBar(state: DictationBarState): void {
+  writeItem(DICTATION_BAR_KEY, JSON.stringify({ open: state.open, autoSend: state.autoSend }));
 }

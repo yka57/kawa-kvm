@@ -116,6 +116,58 @@ describe('TypingEngine', () => {
     });
   });
 
+  it('a stroke with `hold` keeps that modifier down in its release report', async () => {
+    const t = setup();
+    const ALT = 0x04;
+    const promise = t.engine.runProgram(
+      [
+        {
+          kind: 'keys',
+          strokes: [
+            { mod: ALT, key: 0x57, src: 0, tag: 'unicode', group: 0, hold: ALT },
+            { mod: ALT, key: 0x5b, src: 0, tag: 'unicode', group: 0 }
+          ]
+        }
+      ],
+      PACING.normal
+    );
+    await flushMicrotasks();
+    await t.clock.advanceAsync(200);
+    await promise;
+    expect(t.sink.reports).toEqual([
+      ZERO,
+      [ALT, 0, 0x57, 0, 0, 0, 0, 0],
+      [ALT, 0, 0, 0, 0, 0, 0, 0],
+      [ALT, 0, 0x5b, 0, 0, 0, 0, 0],
+      ZERO,
+      ZERO
+    ]);
+  });
+
+  it('a click inside a held group still ends with everything released', async () => {
+    const t = setup();
+    const ALT = 0x04;
+    const promise = t.engine.runProgram(
+      [
+        {
+          kind: 'keys',
+          strokes: [
+            { mod: ALT, key: 0x57, src: 0, tag: 'unicode', group: 0, hold: ALT },
+            { mod: ALT, key: 0x5b, src: 0, tag: 'unicode', group: 0 }
+          ]
+        }
+      ],
+      PACING.normal
+    );
+    await flushMicrotasks();
+    await t.clock.advanceAsync(30); // Alt alone is down
+    t.target.dispatchEvent(new Event('pointerdown'));
+    await t.clock.advanceAsync(200);
+    const result = await promise;
+    expect(result.reason).toBe('mouse-interrupt');
+    expect(t.sink.reports[t.sink.reports.length - 1]).toEqual(ZERO);
+  });
+
   it('honours the safe preset and the afterEnter pause', async () => {
     const t = setup();
     const { result: promise } = await start(t.engine, 'a\nb', PACING.safe);

@@ -144,6 +144,16 @@ const en = {
       unicodeAuto: 'Auto (Windows: via browser / Linux: Ctrl+Shift+U)',
       unicodeBridge: 'Via the target browser',
       unicodeCtrlShiftU: 'Ctrl+Shift+U (Linux)',
+      dictationBar: 'Dictation bar',
+      dictationPlaceholder:
+        'Click here, then dictate or type with the host IME (Enter sends, Esc gives the keyboard back to the target)',
+      dictationAuto: 'Send after a pause',
+      dictationSend: 'Send (Enter)',
+      dictationClose: 'Close the bar',
+      dictationQueued: '{{n}} queued',
+      unicodeAltHex: 'Alt + numpad (Windows, no window, needs setup)',
+      altHexHint:
+        'One-time setup on the Windows target: create the string value EnableHexNumpad = 1 under HKEY_CURRENT_USER\\Control Panel\\Input Method, then sign in again. Without it, Alt + letters act as menu shortcuts.',
       unicodeSkip: 'Skip (ASCII only)',
       bridgeHint:
         'Opens a temporary window in the target browser, types the text as a URL, copies it and pastes it into the original field. The target clipboard is overwritten.',

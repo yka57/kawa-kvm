@@ -36,3 +36,6 @@ export interface PasteRunState {
 export const IDLE_PASTE_RUN: PasteRunState = { status: 'idle', done: 0, total: 0, etaMs: 0 };
 
 export const pasteRunAtom = atom<PasteRunState>(IDLE_PASTE_RUN);
+
+// Dictation bar (host voice / IME input sent to the target as keystrokes).
+export const dictationBarAtom = atom<storage.DictationBarState>(storage.getDictationBar());
