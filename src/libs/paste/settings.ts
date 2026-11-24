@@ -64,6 +64,30 @@ const BRIDGE_WINDOWS: readonly BridgeWindow[] = [
 ];
 const CHORD_FLAGS = ['meta', 'ctrl', 'alt', 'shift'] as const;
 
+/** Off macOS the browser never sees a ⌘ / Win chord reliably (the OS takes it). */
+export const DEFAULT_PASTE_HOTKEY_OTHER: Readonly<PasteHotkey> = {
+  code: 'KeyV',
+  ctrl: true,
+  shift: true
+};
+
+/** ⌘⇧V on a macOS host, Ctrl+Shift+V elsewhere; a fresh object each time. */
+export function defaultPasteHotkey(hostOS: System): PasteHotkey {
+  return { ...(hostOS === 'macOS' ? DEFAULT_PASTE_HOTKEY : DEFAULT_PASTE_HOTKEY_OTHER) };
+}
+
+function sameChord(a: PasteHotkey, b: PasteHotkey): boolean {
+  return a.code === b.code && CHORD_FLAGS.every((flag) => !!a[flag] === !!b[flag]);
+}
+
+/**
+ * Whether the host hotkey can work at all: on a macOS host it rides on the
+ * ⌘ remap (the chord is consumed there), on other hosts it is always usable.
+ */
+export function isPasteHotkeyUsable(hostOS: System, remapActive: boolean): boolean {
+  return hostOS !== 'macOS' || remapActive;
+}
+
 export function defaultPasteSettings(hostOS: System): PasteSettings {
   return {
     version: PASTE_SETTINGS_VERSION,
@@ -76,7 +100,7 @@ export function defaultPasteSettings(hostOS: System): PasteSettings {
     bridgeWindow: 'chromium-private',
     fixCapsLock: true,
     hotkeyEnabled: hostOS === 'macOS',
-    hotkey: { ...DEFAULT_PASTE_HOTKEY }
+    hotkey: defaultPasteHotkey(hostOS)
   };
 }
 
@@ -130,6 +154,16 @@ export function normaliseHotkey(raw: unknown): PasteHotkey | null {
 }
 
 /**
+ * The stored chord; off macOS the macOS default (⌘⇧V, stored before other
+ * hosts had a hotkey of their own) counts as "not chosen".
+ */
+function storedHotkey(raw: unknown, hostOS: System): PasteHotkey | null {
+  const chord = normaliseHotkey(raw);
+  if (chord && hostOS !== 'macOS' && sameChord(chord, DEFAULT_PASTE_HOTKEY)) return null;
+  return chord;
+}
+
+/**
  * Forward-migrating normaliser: unknown fields are dropped, missing or invalid
  * ones get their default, nothing valid is ever discarded. Also understands
  * the pre-release shape (`normalize: {quotes, dashes, nbsp}` object and
@@ -161,6 +195,6 @@ export function normalisePasteSettings(raw: unknown, hostOS: System): PasteSetti
     bridgeWindow: pickEnum(raw.bridgeWindow, BRIDGE_WINDOWS, defaults.bridgeWindow),
     fixCapsLock: pickBool(raw.fixCapsLock, defaults.fixCapsLock),
     hotkeyEnabled: pickBool(raw.hotkeyEnabled, legacyHotkeyEnabled),
-    hotkey: normaliseHotkey(raw.hotkey) ?? { ...defaults.hotkey }
+    hotkey: storedHotkey(raw.hotkey, hostOS) ?? { ...defaults.hotkey }
   };
 }

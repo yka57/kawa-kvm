@@ -13,6 +13,7 @@ import { targetLayoutAtom, targetOsAtom } from '@/jotai/target.ts';
 import { getOperatingSystem } from '@/libs/browser';
 import { isRemapActive } from '@/libs/keyboard/remap-config';
 import {
+  isPasteHotkeyUsable,
   normalisePasteSettings,
   resolveUnicodeMethod,
   type BridgeWindow,
@@ -60,7 +61,7 @@ export const PasteSettingsModal = () => {
     () => normalisePasteSettings(rawSettings, hostOS),
     [rawSettings, hostOS]
   );
-  const remapActive = isRemapActive(remapConfig, hostOS, targetOs);
+  const hotkeyUsable = isPasteHotkeyUsable(hostOS, isRemapActive(remapConfig, hostOS, targetOs));
   // what a paste with non-ASCII text would actually do on this target
   const unicodeMethod = resolveUnicodeMethod(settings.unicodeMethod, targetOs);
   const isOpen = modalState.open;
@@ -287,8 +288,8 @@ export const PasteSettingsModal = () => {
 
         <Divider style={{ margin: 0 }} />
 
-        {/* hotkey: consumed by the keyboard driver only while ⌘ → Ctrl is active */}
-        <div className={clsx('flex flex-col space-y-1', !remapActive && 'opacity-50')}>
+        {/* hotkey: on a macOS host consumed by the keyboard driver only while ⌘ → Ctrl is active */}
+        <div className={clsx('flex flex-col space-y-1', !hotkeyUsable && 'opacity-50')}>
           <div className="flex items-center space-x-3">
             <span className="text-neutral-400">{t('paste.hotkey')}</span>
 
@@ -313,12 +314,12 @@ export const PasteSettingsModal = () => {
             <Switch
               size="small"
               checked={settings.hotkeyEnabled}
-              disabled={!remapActive}
+              disabled={!hotkeyUsable}
               onChange={(checked) => update({ hotkeyEnabled: checked })}
             />
             <Button
               size="small"
-              disabled={!remapActive}
+              disabled={!hotkeyUsable}
               // keep the capture input focused: its blur would end the capture
               // just before this click toggled it back on
               onMouseDown={(e) => e.preventDefault()}
@@ -328,7 +329,7 @@ export const PasteSettingsModal = () => {
             </Button>
           </div>
 
-          {!remapActive && (
+          {!hotkeyUsable && (
             <span className="text-xs text-neutral-500">{t('paste.hotkeyNeedsRemap')}</span>
           )}
         </div>

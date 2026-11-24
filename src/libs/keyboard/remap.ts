@@ -338,8 +338,9 @@ function onKeyDown(
     }
   }
 
-  // 2c. host actions (consumed chords such as ⌘⇧V)
-  if (!ev.repeat && ctx.active) {
+  // 2c. host actions (consumed chords such as ⌘⇧V). Whoever fills the context decides when one
+  // is enabled: they also work while the remap is off (a Windows or Linux host).
+  if (!ev.repeat) {
     const action = ctx.hostActions.find(
       (candidate) =>
         candidate.enabled && matchChord({ code, mods: ev.mods, repeat: ev.repeat }, candidate.chord)

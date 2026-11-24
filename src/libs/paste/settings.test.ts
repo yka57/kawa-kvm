@@ -5,7 +5,9 @@ import type { TargetOs } from '@/libs/storage';
 
 import {
   DEFAULT_PASTE_HOTKEY,
+  defaultPasteHotkey,
   defaultPasteSettings,
+  isPasteHotkeyUsable,
   normaliseHotkey,
   normalisePasteSettings,
   PASTE_SETTINGS_VERSION,
@@ -45,7 +47,10 @@ describe('defaultPasteSettings', () => {
         bridgeWindow: 'chromium-private',
         fixCapsLock: true,
         hotkeyEnabled: host === 'macOS',
-        hotkey: { code: 'KeyV', meta: true, shift: true }
+        hotkey:
+          host === 'macOS'
+            ? { code: 'KeyV', meta: true, shift: true }
+            : { code: 'KeyV', ctrl: true, shift: true }
       });
     }
     expect(PASTE_SETTINGS_VERSION).toBe(2);
@@ -306,5 +311,37 @@ describe('resolveImePreKey / resolveUnicodeMethod', () => {
       expect(resolveUnicodeMethod(method, 'windows')).toBe(method);
       expect(resolveUnicodeMethod(method, 'linux')).toBe(method);
     }
+  });
+});
+
+describe('paste hotkey off macOS', () => {
+  it('defaults to Ctrl+Shift+V, off, and is usable without the ⌘ remap', () => {
+    for (const host of ['Windows', 'Linux'] as const) {
+      expect(defaultPasteHotkey(host)).toEqual({ code: 'KeyV', ctrl: true, shift: true });
+      expect(defaultPasteSettings(host).hotkeyEnabled).toBe(false);
+      expect(isPasteHotkeyUsable(host, false)).toBe(true);
+    }
+    expect(defaultPasteHotkey('macOS')).toEqual(DEFAULT_PASTE_HOTKEY);
+    expect(isPasteHotkeyUsable('macOS', false)).toBe(false);
+    expect(isPasteHotkeyUsable('macOS', true)).toBe(true);
+  });
+
+  it('a stored ⌘⇧V (the old default) becomes Ctrl+Shift+V there; a chosen chord is kept', () => {
+    const stored = {
+      version: 2,
+      hotkeyEnabled: true,
+      hotkey: { code: 'KeyV', meta: true, shift: true }
+    };
+    expect(normalisePasteSettings(stored, 'Windows')).toMatchObject({
+      hotkeyEnabled: true,
+      hotkey: { code: 'KeyV', ctrl: true, shift: true }
+    });
+    expect(normalisePasteSettings(stored, 'macOS').hotkey).toEqual(DEFAULT_PASTE_HOTKEY);
+    const chosen = { version: 2, hotkey: { code: 'KeyP', ctrl: true, alt: true } };
+    expect(normalisePasteSettings(chosen, 'Windows').hotkey).toEqual({
+      code: 'KeyP',
+      ctrl: true,
+      alt: true
+    });
   });
 });

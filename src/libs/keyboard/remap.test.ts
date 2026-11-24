@@ -879,13 +879,24 @@ describe('host actions', () => {
     ]);
   });
 
-  it('chord not matched when inactive or disabled: KeyV is forwarded', () => {
-    const inactive = new Session('macOS', ctxOf(false, {}, [paste]));
+  it('chord not matched when disabled: KeyV is forwarded; an enabled one fires with the remap off too', () => {
+    // the context decides when an action is enabled (on a macOS host: only while the remap is
+    // active); the state machine consumes an enabled chord whether the remap is on or off
+    const inactive = new Session('macOS', ctxOf(false, {}, [{ ...paste, enabled: false }]));
     inactive.runAll([
       down('MetaLeft', { meta: true }, 0),
       down('ShiftLeft', { meta: true, shift: true }, 5)
     ]);
     expect(inactive.run(down('KeyV', { meta: true, shift: true }, 10))).toEqual(['+KeyV']);
+
+    const windows = new Session('Windows', ctxOf(false, {}, [paste]));
+    windows.runAll([
+      down('MetaLeft', { meta: true }, 0),
+      down('ShiftLeft', { meta: true, shift: true }, 5)
+    ]);
+    expect(windows.run(down('KeyV', { meta: true, shift: true }, 10))).toEqual([
+      'host:paste-host-clipboard'
+    ]);
 
     const disabled = new Session('macOS', ctxOf(true, {}, [{ ...paste, enabled: false }]));
     disabled.runAll([

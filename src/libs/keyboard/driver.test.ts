@@ -269,6 +269,28 @@ describe('KeyboardDriver', () => {
     expect(throwing.errors).toHaveLength(1);
   });
 
+  it('a host action also fires while the remap is off (Windows host): Ctrl+Shift+V is consumed', () => {
+    const paste: HostAction = {
+      id: 'paste-host-clipboard',
+      chord: { code: 'KeyV', ctrl: true, shift: true },
+      enabled: true
+    };
+    const h = makeHarness({ active: false, hostActions: [paste] });
+    h.down('ControlLeft', { ctrl: true });
+    h.down('ShiftLeft', { ctrl: true, shift: true });
+    const before = h.sink.reports.length;
+    h.down('KeyV', { ctrl: true, shift: true });
+    expect(h.hostActions).toEqual(['paste-host-clipboard']);
+    // the V never reaches the target
+    expect(h.sink.reports.length).toBe(before);
+
+    const off = makeHarness({ active: false, hostActions: [{ ...paste, enabled: false }] });
+    off.down('ControlLeft', { ctrl: true });
+    off.down('ShiftLeft', { ctrl: true, shift: true });
+    off.down('KeyV', { ctrl: true, shift: true });
+    expect(off.hostActions).toEqual([]);
+  });
+
   it('types a plain v after ⌘⇧V whose V keyup never arrived (released under ⌘)', async () => {
     const paste: HostAction = {
       id: 'paste-host-clipboard',

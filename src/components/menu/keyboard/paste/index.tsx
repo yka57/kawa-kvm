@@ -8,7 +8,7 @@ import { pasteRunAtom, pasteSettingsAtom } from '@/jotai/paste.ts';
 import { targetOsAtom } from '@/jotai/target.ts';
 import { getOperatingSystem } from '@/libs/browser';
 import { isRemapActive } from '@/libs/keyboard/remap-config';
-import { normalisePasteSettings } from '@/libs/paste/settings';
+import { isPasteHotkeyUsable, normalisePasteSettings } from '@/libs/paste/settings';
 
 import { pasteController } from './controller.ts';
 import { formatChord } from './decide.ts';
@@ -27,8 +27,10 @@ export const Paste = () => {
   const targetOs = useAtomValue(targetOsAtom);
 
   const settings = normalisePasteSettings(rawSettings, hostOS);
-  // the hotkey is consumed by the keyboard driver only while the remap is active
-  const isHotkeyActive = settings.hotkeyEnabled && isRemapActive(remapConfig, hostOS, targetOs);
+  // on a macOS host the hotkey is consumed by the keyboard driver only while the remap is active
+  const isHotkeyActive =
+    settings.hotkeyEnabled &&
+    isPasteHotkeyUsable(hostOS, isRemapActive(remapConfig, hostOS, targetOs));
   const isRunning = run.status === 'running';
 
   function handleClick(): void {

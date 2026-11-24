@@ -23,7 +23,7 @@ import {
   type HostMods,
   type RemapContext
 } from '@/libs/keyboard/remap-config';
-import { normalisePasteSettings } from '@/libs/paste/settings';
+import { isPasteHotkeyUsable, normalisePasteSettings } from '@/libs/paste/settings';
 import { isInterruptingKeyDown } from '@/libs/paste/typing-engine';
 
 import { setKeyboardDriver } from './driver-registry';
@@ -56,11 +56,16 @@ export const Keyboard = () => {
   // must never re-run on a config change, since that would release every key.
   const context = useMemo<RemapContext>(() => {
     const paste = normalisePasteSettings(pasteSettings, hostOS);
+    const active = isRemapActive(remapConfig, hostOS, targetOs);
     return {
       cfg: remapConfig,
-      active: isRemapActive(remapConfig, hostOS, targetOs),
+      active,
       hostActions: [
-        { id: 'paste-host-clipboard', chord: paste.hotkey, enabled: paste.hotkeyEnabled }
+        {
+          id: 'paste-host-clipboard',
+          chord: paste.hotkey,
+          enabled: paste.hotkeyEnabled && isPasteHotkeyUsable(hostOS, active)
+        }
       ]
     };
   }, [remapConfig, hostOS, targetOs, pasteSettings]);
