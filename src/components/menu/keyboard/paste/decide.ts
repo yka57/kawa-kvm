@@ -1,10 +1,17 @@
 import { formatKeyDisplay } from '@/components/menu/keyboard/shortcuts/record-key.ts';
 import type { System } from '@/libs/browser';
 import { isModifier } from '@/libs/keyboard/keymap.ts';
-import type { PasteHotkey } from '@/libs/paste/settings';
+import type { PasteHotkey, UnicodeMethod, UnicodeMethodSetting } from '@/libs/paste/settings';
 import { PASTE_SOFT_LIMIT } from '@/libs/paste/text-to-keys';
 import type { CompileStats, SkippedChar } from '@/libs/paste/types';
 import type { PastePhase, StopReason } from '@/libs/paste/typing-engine';
+
+/** What the dictation bar looks at when a run ends (PasteRunState of the store). */
+export interface FinishedRun {
+  status: 'idle' | 'running' | 'done';
+  reason?: StopReason;
+  stopRequested?: boolean;
+}
 
 /**
  * Pure decision helpers of the paste controller and the progress pill
@@ -23,6 +30,18 @@ export function decideStart(plan: { stats: CompileStats }, serialState: string):
   if (plan.stats.typed === 0) return 'nothing';
   if (plan.stats.chars > PASTE_SOFT_LIMIT) return 'confirm';
   return 'run';
+}
+
+/**
+ * Whether the dictation bar may send its next queued chunk after this run:
+ * only when the run typed its whole text and nobody tried to stop it. A
+ * Cancel or a host key that arrives while the last character is being entered
+ * lets the run finish as 'completed' (the text is complete), but it is still
+ * a stop: the chunks behind it go back into the bar.
+ */
+export function queueMayContinue(run: FinishedRun): boolean {
+  if (run.status !== 'done') return false;
+  return (run.reason === undefined || run.reason === 'completed') && run.stopRequested !== true;
 }
 
 export type ClipboardFailure = 'noFocus' | 'permDenied' | 'empty';
@@ -156,6 +175,48 @@ export function phaseKey(phase: PastePhase): string {
  */
 export function capsHintKey(fixCapsLock: boolean): string {
   return fixCapsLock ? 'paste.capsHint' : 'paste.capsOffHint';
+}
+
+/** The options of "Japanese and other non-ASCII" in the order the settings modal lists them. */
+export const UNICODE_METHOD_ORDER: readonly UnicodeMethodSetting[] = [
+  'auto',
+  'bridge',
+  'ime-code',
+  'ctrl-shift-u',
+  'alt-hex',
+  'skip'
+];
+
+const UNICODE_METHOD_LABEL_KEYS: Record<UnicodeMethodSetting, string> = {
+  auto: 'unicodeAuto',
+  bridge: 'unicodeBridge',
+  'ime-code': 'unicodeImeCode',
+  'ctrl-shift-u': 'unicodeCtrlShiftU',
+  'alt-hex': 'unicodeAltHex',
+  skip: 'unicodeSkip'
+};
+
+/** i18n key of an option of "Japanese and other non-ASCII". */
+export function unicodeMethodLabelKey(method: UnicodeMethodSetting): string {
+  return `paste.${UNICODE_METHOD_LABEL_KEYS[method]}`;
+}
+
+const UNICODE_HINT_KEYS: Record<UnicodeMethod, string | null> = {
+  bridge: 'bridgeHint',
+  'ime-code': 'imeCodeHint',
+  'ctrl-shift-u': 'unicodeHint',
+  'alt-hex': 'altHexHint',
+  skip: null
+};
+
+/**
+ * i18n key of the line under the "Japanese and other non-ASCII" select: what
+ * the RESOLVED method (the one a paste would use on this target) does and
+ * needs; null for 'skip', which has nothing to explain.
+ */
+export function unicodeHintKey(method: UnicodeMethod): string | null {
+  const key = UNICODE_HINT_KEYS[method];
+  return key === null ? null : `paste.${key}`;
 }
 
 const MAC_MODIFIER_LABELS = { meta: '⌘', ctrl: '⌃', alt: '⌥', shift: '⇧' } as const;

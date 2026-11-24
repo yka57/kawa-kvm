@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { KeycodeMap, ModifierBits } from '@/libs/keyboard/keymap';
+import { IME_CODE_COMMIT } from '@/libs/paste/unicode-entry';
 import { flattenKeys } from '@/test/fakes';
 
 import languages from './languages';
@@ -26,6 +28,20 @@ function leaves(obj: unknown, prefix = ''): [string, unknown][] {
 
 function placeholders(text: string): string[] {
   return [...text.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1]).sort();
+}
+
+/** A key chord as the texts spell it: modifier names, then the key's code name without "Key". */
+function chordLabel(chord: { mod: number; key: number }): string {
+  const modifiers = [
+    [ModifierBits.LeftCtrl, 'Ctrl'],
+    [ModifierBits.LeftShift, 'Shift'],
+    [ModifierBits.LeftAlt, 'Alt']
+  ] as const;
+  const code = Object.keys(KeycodeMap).find((name) => KeycodeMap[name] === chord.key) ?? '';
+  return [
+    ...modifiers.filter(([bit]) => (chord.mod & bit) !== 0).map(([, name]) => name),
+    code.replace(/^Key/, '')
+  ].join('+');
 }
 
 describe('locale parity', () => {
@@ -178,6 +194,59 @@ describe('locale parity', () => {
     ].map((key) => `paste.${key}`);
     const missing = required.filter((key) => !enLeafKeys.includes(key));
     expect(missing).toEqual([]);
+  });
+
+  it('en and ja contain the keys of the Windows methods that open no window; the Alt + numpad hint names its conditions', () => {
+    const required = ['unicodeImeCode', 'imeCodeHint', 'unicodeAltHex', 'altHexHint'].map(
+      (key) => `paste.${key}`
+    );
+    const missing = required.filter((key) => !enLeafKeys.includes(key));
+    expect(missing).toEqual([]);
+
+    const hints = [en.translation.paste, ja.translation.paste];
+    for (const { altHexHint } of hints) {
+      // Alt + numpad types nothing with NumLock off under the default Microsoft IME
+      expect(altHexHint).toContain('NumLock');
+      expect(altHexHint).toContain('EnableHexNumpad');
+    }
+  });
+
+  it('the IME code input hint keeps its warnings, and claims nothing that was not measured', () => {
+    const enHint = en.translation.paste.imeCodeHint;
+    const jaHint = ja.translation.paste.imeCodeHint;
+
+    // the sequence it describes ends with the chord the compiler really sends ("Ctrl+M")
+    const commit = chordLabel(IME_CODE_COMMIT);
+    expect(enHint).toContain(`F5, ${commit})`);
+    expect(jaHint).toContain(`F5 → ${commit}）`);
+
+    // kana input: wrong characters, without any error
+    expect(enHint).toMatch(/romaji input[^.]*: with kana input every character comes out wrong\./);
+    expect(jaHint).toMatch(/ローマ字入力[^。]*かな入力だと、すべて違う文字になります/);
+    // IME unavailable: the digits and F5 reach the application
+    expect(enHint).toMatch(/IME is unavailable: the digits and F5 would reach the application/);
+    expect(jaHint).toMatch(/IME が使えない欄では数字と F5 がそのまま届く/);
+    // a lasting change on the target
+    expect(enHint).toContain(
+      "Every character is added to the target IME's input history (prediction suggestions)."
+    );
+    expect(jaHint).toContain('確定した文字は操作先の IME の入力履歴（予測候補）に残ります。');
+    // a lost key shows as full-width digits or letters: the way out is the Safe speed
+    expect(enHint).toMatch(/arrives as full-width digits or letters[^.]*: set the speed to Safe\./);
+    expect(jaHint).toMatch(/全角の数字や英字のまま入るときは[^。]*速度を「安全」にしてください。/);
+    // code input is never typed faster than Normal
+    expect(enHint).toContain('About 0.25 s per character: Fast is typed at the pace of Normal.');
+    expect(jaHint).toContain(
+      '目安は 1 文字 0.25 秒です（「高速」を選んでも「標準」の速さで打ちます）。'
+    );
+    // measured in a virtual machine on Windows 11 only (Edge and Notepad)...
+    expect(enHint).toMatch(/Measured on Windows 11 in a virtual machine only \(Edge and Notepad\)/);
+    expect(jaHint).toMatch(/測定したのは仮想マシンの Windows 11（Edge とメモ帳）だけ/);
+    // ...so neither hint may say anything about Teams or Windows 10: the READMEs list them as
+    // not measured, and a hint that names them would read as a claim that they work
+    for (const hint of [enHint, jaHint]) {
+      expect(hint).not.toMatch(/Teams|Windows\s*10/i);
+    }
   });
 
   it('every other locale is a subset of en (extra keys only warn)', () => {

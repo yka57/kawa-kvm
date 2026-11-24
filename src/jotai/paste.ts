@@ -13,7 +13,8 @@ export const pasteSettingsAtom = atom<Record<string, unknown> | null>(
 // Why a paste run ended: the typing engine's StopReason.
 export type PasteStopReason = StopReason;
 
-// How the text reaches the target: v1 keystrokes, Ctrl+Shift+U or the browser bridge.
+// How the text reaches the target: v1 keystrokes ('direct'), code point entry ('unicode':
+// Ctrl+Shift+U, Alt+numpad or IME code input) or the browser bridge.
 export type PasteMethod = PastePlan['kind'];
 
 export interface PasteRunState {
@@ -25,6 +26,9 @@ export interface PasteRunState {
   etaMs: number;
   // set once status is 'done'
   reason?: PasteStopReason;
+  // a 'completed' run somebody tried to stop while its last character was being entered: the
+  // text was complete, so the run finished, but nothing queued behind it may follow
+  stopRequested?: boolean;
   // unique characters that could not be typed, with their occurrence counts
   skipped?: { char: string; count: number }[];
   // set once the run has started

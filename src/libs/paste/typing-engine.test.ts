@@ -16,6 +16,7 @@ import {
   TypingEngine,
   type EngineDeps,
   type EngineEvent,
+  type Pacing,
   type ProgramStep,
   type WaitStep,
   type WaitVerdict
@@ -708,6 +709,65 @@ describe('TypingEngine.runProgram', () => {
     expect(t.events[0]).toMatchObject({ type: 'start', etaMs: 40 });
   });
 
+  it('minMs: a stroke takes at least that long from its press to the next press, whatever the preset', async () => {
+    // A must not be followed sooner than 40 ms after its press; B has no floor; C is the last
+    const steps = (): ProgramStep[] => [
+      { kind: 'keys', strokes: [stroke(0x04, { minMs: 40 }), B, stroke(0x06, { minMs: 40 })] }
+    ];
+    const run = async (pacing: Pacing) => {
+      const t = setup();
+      const { result: promise } = await begin(t.engine, steps(), pacing);
+      await t.clock.advanceAsync(1000);
+      expect(await promise).toEqual({ reason: 'completed', typedStrokes: 3, totalStrokes: 3 });
+      expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, KEY_B, ZERO, KEY_C, ZERO, ZERO]);
+      expect(t.clock.pendingTimers()).toBe(0);
+      return { times: t.times, etaMs: t.events[0].etaMs };
+    };
+
+    // fast: A is held 10 ms as always and B waits until 40; B itself keeps 10 / 10; nothing is
+    // slept after the last stroke of the program
+    expect(await run(PACING.fast)).toEqual({
+      times: [0, 0, 10, 40, 50, 60, 70, 70],
+      etaMs: 40 + 20 + 40
+    });
+    expect(estimateProgramMs(steps(), PACING.fast)).toBe(100);
+    // normal already takes 40 ms a stroke and safe 100: nothing changes there
+    expect(await run(PACING.normal)).toEqual({
+      times: [0, 0, 20, 40, 60, 80, 100, 100],
+      etaMs: 120
+    });
+    expect(await run(PACING.safe)).toEqual({
+      times: [0, 0, 50, 100, 150, 200, 250, 250],
+      etaMs: 300
+    });
+  });
+
+  it('minMs is a floor, not an addition: afterMs and the pause after Enter count towards it', async () => {
+    const t = setup();
+    const steps: ProgramStep[] = [
+      {
+        kind: 'keys',
+        strokes: [
+          // 10 + 10 + 100 is more than 40: the stroke's own pause stands
+          stroke(0x04, { afterMs: 100, minMs: 40 }),
+          // 10 + 10 + 5 is less: stretched to 40, not to 45
+          stroke(0x05, { afterMs: 5, minMs: 40 }),
+          // Enter at fast takes 10 + 10 + 60
+          stroke(KeycodeMap.Enter, { tag: 'enter', minMs: 40 }),
+          stroke(0x06)
+        ]
+      }
+    ];
+    expect(estimateProgramMs(steps, PACING.fast)).toBe(120 + 40 + 80 + 20);
+    const { result: promise } = await begin(t.engine, steps, PACING.fast);
+    await t.clock.advanceAsync(1000);
+    expect((await promise).reason).toBe('completed');
+    // A at 0, B at 120, Enter at 160, C at 240
+    const pressed = t.sink.reports.filter((report) => report[2] !== 0);
+    expect(pressed).toEqual([KEY_A, KEY_B, ENTER, KEY_C]);
+    expect(t.times).toEqual([0, 0, 10, 120, 130, 160, 170, 240, 250, 250]);
+  });
+
   it('counts strokes, Enter pauses, afterMs, sleeps and wait estimates in the ETA', async () => {
     const t = setup();
     const steps: ProgramStep[] = [
@@ -1076,10 +1136,13 @@ describe('TypingEngine atomic groups', () => {
       expect(t.engine.state, interrupt).toBe('running');
 
       await t.clock.advanceAsync(100);
+      // completed, and the run says that a stop was asked for and dropped
+      const asked = interrupt === 'cancel' ? 'cancelled' : 'key-interrupt';
       expect(await promise, interrupt).toEqual({
         reason: 'completed',
         typedStrokes: 3,
-        totalStrokes: 3
+        totalStrokes: 3,
+        stopDropped: asked
       });
       expect(t.sink.reports, interrupt).toEqual([
         ZERO,
@@ -1097,9 +1160,194 @@ describe('TypingEngine atomic groups', () => {
         type: 'stop',
         done: 3,
         total: 3,
+        reason: 'completed',
+        stopDropped: asked
+      });
+    }
+  });
+
+  it('a run nobody tried to stop, and a run that was stopped, report no dropped stop', async () => {
+    // completed without any cancel
+    const a = setup();
+    const first = await begin(
+      a.engine,
+      [{ kind: 'keys', strokes: [A, group(0x05, 1), group(0x06, 1)] }],
+      PACING.normal
+    );
+    await a.clock.advanceAsync(200);
+    const done = await first.result;
+    expect(done).toEqual({ reason: 'completed', typedStrokes: 3, totalStrokes: 3 });
+    expect('stopDropped' in done).toBe(false);
+    expect('stopDropped' in a.events[a.events.length - 1]).toBe(false);
+
+    // a cancel deferred in a group that is not the last takes effect: cancelled, nothing dropped
+    const b = setup();
+    const second = await begin(
+      b.engine,
+      [{ kind: 'keys', strokes: [group(0x04, 1), group(0x05, 1), group(0x06, 2)] }],
+      PACING.normal
+    );
+    await b.clock.advanceAsync(10);
+    b.engine.cancel();
+    await b.clock.advanceAsync(200);
+    const stopped = await second.result;
+    expect(stopped).toEqual({ reason: 'cancelled', typedStrokes: 2, totalStrokes: 3 });
+    expect('stopDropped' in stopped).toBe(false);
+    expect('stopDropped' in b.events[b.events.length - 1]).toBe(false);
+  });
+
+  // IME code input ends with the key that turns the target IME off again (tag 'ime-pre')
+  const imeKey = stroke(KeycodeMap.Lang2, { tag: 'ime-pre', src: -1 });
+  const IME_KEY = [0, 0, KeycodeMap.Lang2, 0, 0, 0, 0, 0];
+
+  it("a cancel deferred in the last group is dropped when only 'ime-pre' strokes are left: they are sent, completed", async () => {
+    for (const interrupt of ['cancel', 'keydown', 'lock'] as const) {
+      const t = setup();
+      const { result: promise } = await begin(
+        t.engine,
+        [{ kind: 'keys', strokes: [A, group(0x05, 1), group(0x06, 1), imeKey] }],
+        PACING.normal
+      );
+      await t.clock.advanceAsync(50); // A 0–20, its gap, B (the group's first key) from 40
+      if (interrupt === 'cancel') t.engine.cancel();
+      else if (interrupt === 'keydown') t.target.dispatchEvent(keydown('KeyQ'));
+      else t.lock.interrupt('keydown');
+      expect(t.engine.state, interrupt).toBe('running');
+
+      // past the group's last release at 100: the whole text is typed, the run goes on
+      await t.clock.advanceAsync(55);
+      expect(t.engine.state, interrupt).toBe('running');
+      expect(t.lock.owner, interrupt).toBe('paste');
+
+      await t.clock.advanceAsync(100);
+      expect(await promise, interrupt).toEqual({
+        reason: 'completed',
+        typedStrokes: 4,
+        totalStrokes: 4,
+        stopDropped: interrupt === 'cancel' ? 'cancelled' : 'key-interrupt'
+      });
+      expect(t.sink.reports, interrupt).toEqual([
+        ZERO,
+        KEY_A,
+        ZERO,
+        KEY_B,
+        ZERO,
+        KEY_C,
+        ZERO,
+        IME_KEY,
+        ZERO,
+        ZERO
+      ]);
+      // the group's gap is kept before the IME key; nothing is slept after it
+      expect(t.times, interrupt).toEqual([0, 0, 20, 40, 60, 80, 100, 120, 140, 140]);
+      expect(t.lock.isLocked(), interrupt).toBe(false);
+      expect(t.clock.pendingTimers(), interrupt).toBe(0);
+      expect(t.events[t.events.length - 1], interrupt).toMatchObject({
+        type: 'stop',
+        done: 4,
+        total: 4,
         reason: 'completed'
       });
     }
+  });
+
+  it("sends every 'ime-pre' stroke left after the last group, in whatever keys step it is", async () => {
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [
+        { kind: 'keys', strokes: [group(0x04, 1), imeKey] },
+        { kind: 'sleep', ms: 100 },
+        { kind: 'keys', strokes: [imeKey] }
+      ],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(10);
+    t.engine.cancel();
+    await t.clock.advanceAsync(300);
+    expect(await promise).toEqual({
+      reason: 'completed',
+      typedStrokes: 3,
+      totalStrokes: 3,
+      stopDropped: 'cancelled'
+    });
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, IME_KEY, ZERO, IME_KEY, ZERO, ZERO]);
+    expect(t.times).toEqual([0, 0, 20, 40, 60, 180, 200, 200]);
+  });
+
+  it("applies a deferred cancel while a stroke other than 'ime-pre' is still to come", async () => {
+    // an IME key right after the group does not count when text follows it; neither does a
+    // later keys step that is not only IME keys: the stop in the middle of a text stays a stop
+    const programs: ProgramStep[][] = [
+      [{ kind: 'keys', strokes: [group(0x04, 1), imeKey, B] }],
+      [{ kind: 'keys', strokes: [group(0x04, 1), imeKey, group(0x05, 2), imeKey] }],
+      [
+        { kind: 'keys', strokes: [group(0x04, 1), imeKey] },
+        { kind: 'keys', strokes: [imeKey, B, imeKey] }
+      ]
+    ];
+    for (const [n, steps] of programs.entries()) {
+      for (const interrupt of ['cancel', 'keydown'] as const) {
+        const label = `program ${n} ${interrupt}`;
+        const t = setup();
+        const total = steps.reduce((sum, s) => sum + (s.kind === 'keys' ? s.strokes.length : 0), 0);
+        const { result: promise } = await begin(t.engine, steps, PACING.normal);
+        await t.clock.advanceAsync(10); // holding the group's only key
+        if (interrupt === 'cancel') t.engine.cancel();
+        else t.target.dispatchEvent(keydown('KeyQ'));
+        expect(t.engine.state, label).toBe('running');
+
+        await t.clock.advanceAsync(300);
+        expect(await promise, label).toEqual({
+          reason: interrupt === 'cancel' ? 'cancelled' : 'key-interrupt',
+          typedStrokes: 1,
+          totalStrokes: total
+        });
+        // the group is finished, and neither the IME key nor anything else follows it
+        expect(t.sink.reports, label).toEqual([ZERO, KEY_A, ZERO, ZERO]);
+        expect(t.times, label).toEqual([0, 0, 20, 20]);
+      }
+    }
+  });
+
+  it("a stop that is never deferred is not dropped: a click with only 'ime-pre' strokes left stops at once", async () => {
+    const stops = [
+      ['pointerdown', 'mouse-interrupt'],
+      ['pagehide', 'tab-hidden'],
+      ['serial', 'serial-error']
+    ] as const;
+    for (const [type, reason] of stops) {
+      const t = setup();
+      const { result: promise } = await begin(
+        t.engine,
+        [{ kind: 'keys', strokes: [group(0x04, 1), group(0x05, 1), imeKey] }],
+        PACING.normal
+      );
+      await t.clock.advanceAsync(10); // holding the group's first key
+      if (type === 'serial') t.engine.cancel('serial-error');
+      else t.target.dispatchEvent(new Event(type));
+      expect(t.lock.isLocked(), type).toBe(false);
+      await flushMicrotasks();
+      expect(await promise, type).toEqual({ reason, typedStrokes: 0, totalStrokes: 3 });
+      expect(t.sink.reports, type).toEqual([ZERO, KEY_A, ZERO]);
+    }
+  });
+
+  it("a cancel after the last group, while the 'ime-pre' strokes are sent, stops at once as before", async () => {
+    // only the cancel deferred inside the group is dropped: nothing holds one back afterwards
+    const t = setup();
+    const { result: promise } = await begin(
+      t.engine,
+      [{ kind: 'keys', strokes: [group(0x04, 1), imeKey] }],
+      PACING.normal
+    );
+    await t.clock.advanceAsync(30); // the gap between the group and the IME key
+    t.engine.cancel();
+    expect(t.lock.isLocked()).toBe(false);
+    await flushMicrotasks();
+    expect(await promise).toEqual({ reason: 'cancelled', typedStrokes: 1, totalStrokes: 2 });
+    expect(t.sink.reports).toEqual([ZERO, KEY_A, ZERO, ZERO]);
+    expect(t.times).toEqual([0, 0, 20, 30]);
   });
 
   it('cancels at once between groups and outside them', async () => {

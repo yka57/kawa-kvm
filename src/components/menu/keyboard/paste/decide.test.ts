@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest';
 import en from '@/i18n/locales/en';
 import ja from '@/i18n/locales/ja';
 import { matchChord } from '@/libs/keyboard/remap-config';
-import { normaliseHotkey } from '@/libs/paste/settings';
+import {
+  normaliseHotkey,
+  normalisePasteSettings,
+  resolveUnicodeMethod,
+  type UnicodeMethod
+} from '@/libs/paste/settings';
 import {
   DEFAULT_COMPILE_OPTIONS,
   PASTE_SOFT_LIMIT,
@@ -28,9 +33,13 @@ import {
   MAX_SKIPPED_SHOWN,
   phaseKey,
   PILL_ETA_THRESHOLD_MS,
+  queueMayContinue,
   reasonKey,
   showPill,
-  summarizeSkipped
+  summarizeSkipped,
+  UNICODE_METHOD_ORDER,
+  unicodeHintKey,
+  unicodeMethodLabelKey
 } from './decide';
 
 const compile = (text: string) => textToKeySequence(text, DEFAULT_COMPILE_OPTIONS);
@@ -80,6 +89,32 @@ describe('ETA of a direct paste', () => {
     expect(eta('ab\nc')).toBe(4 * 40 + 100);
     expect(eta('ab\nc', PACING.safe)).toBe(4 * 100 + 150);
     expect(eta('')).toBe(0);
+  });
+});
+
+describe('queueMayContinue (dictation bar: the next queued chunk)', () => {
+  it('only after a run that completed and that nobody tried to stop', () => {
+    expect(queueMayContinue({ status: 'done', reason: 'completed' })).toBe(true);
+    expect(queueMayContinue({ status: 'done' })).toBe(true);
+    // a Cancel or a host key during the last character: the run completed, the queue stops
+    expect(queueMayContinue({ status: 'done', reason: 'completed', stopRequested: true })).toBe(
+      false
+    );
+  });
+
+  it('never after a stop, and not while a run is going on', () => {
+    for (const reason of [
+      'cancelled',
+      'key-interrupt',
+      'mouse-interrupt',
+      'tab-hidden',
+      'serial-error',
+      'lock-busy'
+    ] as const) {
+      expect(queueMayContinue({ status: 'done', reason }), reason).toBe(false);
+    }
+    expect(queueMayContinue({ status: 'running' })).toBe(false);
+    expect(queueMayContinue({ status: 'idle' })).toBe(false);
   });
 });
 
@@ -228,6 +263,63 @@ describe('capsHintKey', () => {
       expect(typeof enPaste[leaf], key).toBe('string');
       expect(typeof jaPaste[leaf], key).toBe('string');
     }
+  });
+});
+
+describe('the "Japanese and other non-ASCII" select: option order, labels and hint', () => {
+  const enPaste = en.translation.paste as Record<string, string>;
+  const jaPaste = ja.translation.paste as Record<string, string>;
+  const inBothLocales = (key: string) => {
+    expect(key.startsWith('paste.'), key).toBe(true);
+    const leaf = key.slice('paste.'.length);
+    expect(typeof enPaste[leaf], key).toBe('string');
+    expect(typeof jaPaste[leaf], key).toBe('string');
+  };
+
+  it('lists auto, the bridge, IME code input, Ctrl+Shift+U, Alt + numpad and skip, in that order', () => {
+    expect(UNICODE_METHOD_ORDER).toEqual([
+      'auto',
+      'bridge',
+      'ime-code',
+      'ctrl-shift-u',
+      'alt-hex',
+      'skip'
+    ]);
+    // every option is a value the stored settings accept: none falls back to 'auto'
+    for (const unicodeMethod of UNICODE_METHOD_ORDER) {
+      expect(normalisePasteSettings({ unicodeMethod }, 'macOS').unicodeMethod).toBe(unicodeMethod);
+    }
+  });
+
+  it('gives every option its own label, present in en and ja', () => {
+    const keys = UNICODE_METHOD_ORDER.map(unicodeMethodLabelKey);
+    expect(new Set(keys).size).toBe(UNICODE_METHOD_ORDER.length);
+    keys.forEach(inBothLocales);
+    expect(unicodeMethodLabelKey('ime-code')).toBe('paste.unicodeImeCode');
+    expect(unicodeMethodLabelKey('alt-hex')).toBe('paste.unicodeAltHex');
+  });
+
+  it('explains the resolved method under the select: its own hint for each, none for skip', () => {
+    expect(unicodeHintKey('ime-code')).toBe('paste.imeCodeHint');
+    expect(unicodeHintKey('bridge')).toBe('paste.bridgeHint');
+    expect(unicodeHintKey('ctrl-shift-u')).toBe('paste.unicodeHint');
+    expect(unicodeHintKey('alt-hex')).toBe('paste.altHexHint');
+    expect(unicodeHintKey('skip')).toBeNull();
+
+    // every method an option can resolve to, on every target OS
+    const resolved = new Set<UnicodeMethod>();
+    for (const option of UNICODE_METHOD_ORDER) {
+      for (const targetOs of ['windows', 'linux', 'macos'] as const) {
+        resolved.add(resolveUnicodeMethod(option, targetOs));
+      }
+    }
+    expect([...resolved].sort()).toEqual(['alt-hex', 'bridge', 'ctrl-shift-u', 'ime-code', 'skip']);
+    const hints = [...resolved].map(unicodeHintKey).filter((key) => key !== null);
+    expect(new Set(hints).size).toBe(4);
+    hints.forEach(inBothLocales);
+    // the hint follows the resolved method, not the stored option: a macOS target skips
+    expect(unicodeHintKey(resolveUnicodeMethod('ime-code', 'macos'))).toBeNull();
+    expect(unicodeHintKey(resolveUnicodeMethod('auto', 'windows'))).toBe('paste.bridgeHint');
   });
 });
 

@@ -26,7 +26,14 @@ import * as storage from '@/libs/storage';
 import type { TargetLayout } from '@/libs/storage';
 
 import { pasteController, pasteSettingsModalAtom } from './controller.ts';
-import { capsHintKey, chordFromKeyEvent, formatChord } from './decide.ts';
+import {
+  capsHintKey,
+  chordFromKeyEvent,
+  formatChord,
+  UNICODE_METHOD_ORDER,
+  unicodeHintKey,
+  unicodeMethodLabelKey
+} from './decide.ts';
 
 /**
  * Paste settings modal (spec v1 §5.5, v2 §10), mounted once in App.tsx and
@@ -139,13 +146,8 @@ export const PasteSettingsModal = () => {
     { value: 'enter', label: t('paste.newlineEnter') },
     { value: 'shift-enter', label: t('paste.newlineShiftEnter') }
   ];
-  const unicodeMethodOptions: { value: UnicodeMethodSetting; label: string }[] = [
-    { value: 'auto', label: t('paste.unicodeAuto') },
-    { value: 'bridge', label: t('paste.unicodeBridge') },
-    { value: 'ctrl-shift-u', label: t('paste.unicodeCtrlShiftU') },
-    { value: 'alt-hex', label: t('paste.unicodeAltHex') },
-    { value: 'skip', label: t('paste.unicodeSkip') }
-  ];
+  const unicodeMethodOptions: { value: UnicodeMethodSetting; label: string }[] =
+    UNICODE_METHOD_ORDER.map((value) => ({ value, label: t(unicodeMethodLabelKey(value)) }));
   const bridgeWindowOptions: { value: BridgeWindow; label: string }[] = [
     { value: 'chromium-private', label: t('paste.bridgeChromium') },
     { value: 'firefox-private', label: t('paste.bridgeFirefox') },
@@ -157,14 +159,7 @@ export const PasteSettingsModal = () => {
     { value: 'NonConvert', label: t('paste.imeNonConvert') },
     { value: 'none', label: t('paste.imeNone') }
   ];
-  const unicodeHint =
-    unicodeMethod === 'bridge'
-      ? 'paste.bridgeHint'
-      : unicodeMethod === 'ctrl-shift-u'
-        ? 'paste.unicodeHint'
-        : unicodeMethod === 'alt-hex'
-          ? 'paste.altHexHint'
-          : null;
+  const unicodeHint = unicodeHintKey(unicodeMethod);
 
   return (
     <Modal

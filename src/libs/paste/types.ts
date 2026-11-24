@@ -15,7 +15,11 @@ export interface KeyCombo {
 /** Printable character → chord. Every key is a single character. */
 export type LayoutTable = Record<string, KeyCombo>;
 
-/** `unicode`: a Ctrl+Shift+U entry (spec §5); `chord`: a bridge control key such as Ctrl+L (§4.2). */
+/**
+ * `unicode`: a stroke of a code point entry (Ctrl+Shift+U, spec §5; Alt+numpad; IME code input);
+ * `ime-pre`: a key that turns the target IME off or on; `chord`: a bridge control key such as
+ * Ctrl+L (§4.2).
+ */
 export type StrokeTag = 'char' | 'enter' | 'tab' | 'ime-pre' | 'unicode' | 'chord';
 
 /** One press/release pair the typing engine executes. */
@@ -34,6 +38,13 @@ export interface KeyStroke {
   hold?: number;
   /** Extra pause after this stroke's gap, for the target to settle (IME switch, input method, clipboard). */
   afterMs?: number;
+  /**
+   * Least time from this stroke's press to the next stroke's press, whatever
+   * the speed preset: at a pace whose hold and gap are shorter, the pause
+   * after the release is stretched to it. For a key the target needs this
+   * long to act on (IME code input: every key from LANG1 to the commit).
+   */
+  minMs?: number;
   /**
    * Atomic group id: the typing engine defers a cancel until the last stroke
    * of the run of consecutive strokes sharing this id has been released.

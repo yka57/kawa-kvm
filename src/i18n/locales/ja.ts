@@ -144,6 +144,7 @@ const ja = {
       unicodeMethod: '日本語など（ASCII 以外）',
       unicodeAuto: '自動（Windows: ブラウザー経由 / Linux: Ctrl+Shift+U）',
       unicodeBridge: 'ブラウザー経由',
+      unicodeImeCode: 'IME コード入力（Windows・ウィンドウを開かない）',
       unicodeCtrlShiftU: 'Ctrl+Shift+U（Linux）',
       dictationBar: '音声入力バー',
       dictationPlaceholder:
@@ -154,10 +155,12 @@ const ja = {
       dictationQueued: '送信待ち {{n}}',
       unicodeAltHex: 'Alt＋テンキー（Windows・ウィンドウを開かない・要設定）',
       altHexHint:
-        '操作先の Windows で一度だけ設定が必要です: レジストリ HKEY_CURRENT_USER\\Control Panel\\Input Method に文字列値 EnableHexNumpad = 1 を作り、サインインし直します。未設定のまま使うと Alt＋英字がメニュー操作として働きます。',
+        '操作先の Windows で一度だけ設定が必要です: レジストリ HKEY_CURRENT_USER\\Control Panel\\Input Method に文字列値 EnableHexNumpad = 1 を作り、サインインし直します。未設定のまま使うと Alt＋英字がメニュー操作として働きます。操作先の NumLock はオンにしておいてください（オフだと、既定の Microsoft IME では何も入力されません）。',
       unicodeSkip: '入力しない（ASCII のみ）',
       bridgeHint:
         '操作先のブラウザーで一時ウィンドウを開き、URL として打ち込んだテキストをコピーして元の欄に貼り付けます。操作先のクリップボードは上書きされます。',
+      imeCodeHint:
+        'キーで打てない文字を、操作先の Microsoft IME（日本語）のコード入力で 1 文字ずつ打ちます（IME オン → 文字コード → F5 → Ctrl+M）。操作先の設定変更は不要で、選択中の入力欄にそのまま入ります。目安は 1 文字 0.25 秒です（「高速」を選んでも「標準」の速さで打ちます）。IME がローマ字入力（既定）であることが条件です（かな入力だと、すべて違う文字になります）。IME が使えない欄では数字と F5 がそのまま届くので使わないでください。確定した文字は操作先の IME の入力履歴（予測候補）に残ります。1 文字が全角の数字や英字のまま入るときは、操作先の処理が追いついていないので、速度を「安全」にしてください。測定したのは仮想マシンの Windows 11（Edge とメモ帳）だけなので、最初はメモ帳で試してください。',
       unicodeHint:
         'IBus / fcitx5 / GTK / Chromium の Ctrl+Shift+U で 1 文字ずつ入力します。Mozc は直接入力にしてください。',
       bridgeWindow: 'ブラウザー経由で開くウィンドウ',

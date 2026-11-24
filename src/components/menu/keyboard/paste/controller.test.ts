@@ -25,6 +25,7 @@ import {
   ZERO_REPORT,
   type PastePhase
 } from '@/libs/paste/typing-engine';
+import { IME_CODE_COMMIT } from '@/libs/paste/unicode-entry';
 import { FakeClock, FakeSink, flushMicrotasks } from '@/test/fakes';
 
 import {
@@ -34,6 +35,7 @@ import {
   type DriverLike,
   type PasteUi
 } from './controller';
+import { queueMayContinue } from './decide';
 
 const ZERO = [...ZERO_REPORT];
 const press = (key: number, mod = 0): number[] => [mod, 0, key, 0, 0, 0, 0, 0];
@@ -617,6 +619,29 @@ function bridgeSeconds(text: string, sampler: FrameSampler): number {
   return Math.ceil(estimateProgramMs(program, PACING.normal) / 1000);
 }
 
+/** Every key press on the wire so far, in order (the release reports left out). */
+function presses(h: Harness): number[][] {
+  return h.sink.reports.filter((report) => report[2] !== 0);
+}
+
+/** Advances the clock until `key` has gone down `count` times: that stroke is being held. */
+async function untilPressed(h: Harness, key: number, count: number): Promise<void> {
+  const seen = () => h.sink.reports.filter((report) => report[2] === key).length;
+  for (let i = 0; i < 2000 && seen() < count; i++) await h.clock.advanceAsync(5);
+  expect(seen()).toBe(count);
+}
+
+/** The presses of one IME code-input unit: its hex digits, F5 and the commit chord. */
+function imeUnit(digits: string): number[][] {
+  return [
+    ...[...digits].map((digit) =>
+      press(KeycodeMap[digit >= 'a' ? `Key${digit.toUpperCase()}` : `Digit${digit}`])
+    ),
+    press(KeycodeMap.F5),
+    press(IME_CODE_COMMIT.key, IME_CODE_COMMIT.mod)
+  ];
+}
+
 /** The first key press on the wire (a bridge run sends its first after the still-screen check). */
 async function firstPress(h: Harness): Promise<number[] | undefined> {
   for (let elapsed = 0; elapsed <= 1000; elapsed += 5) {
@@ -673,6 +698,278 @@ describe('PasteController: methods, bridge and Caps Lock (spec v2)', () => {
     expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', skipped: [] });
   });
 
+  it('IME code input on a Windows target: LANG2, the direct key, LANG1, digits, F5, the commit, LANG2', async () => {
+    const h = makeHarness({
+      clipboard: 'aあ',
+      targetOs: 'windows',
+      settings: { unicodeMethod: 'ime-code' },
+      // no window is opened and nothing is watched: neither the video nor the bridge dialog is needed
+      video: false
+    });
+    await expect(h.controller.startFromRow()).resolves.toBe('started');
+    // ten strokes of 20 + 20 ms, the settle after the first LANG2 and 100 ms after the first F5
+    expect(h.run()).toMatchObject({
+      status: 'running',
+      method: 'unicode',
+      total: 10,
+      etaMs: 10 * 40 + 150 + 100
+    });
+    await settle(h);
+    expect(presses(h)).toEqual([
+      press(KeycodeMap.Lang2),
+      press(KeycodeMap.KeyA),
+      press(KeycodeMap.Lang1),
+      press(KeycodeMap.Digit3),
+      press(KeycodeMap.Digit0),
+      press(KeycodeMap.Digit4),
+      press(KeycodeMap.Digit2),
+      press(KeycodeMap.F5),
+      // the commit chord: its modifier and its key go down in one report
+      press(IME_CODE_COMMIT.key, IME_CODE_COMMIT.mod),
+      press(KeycodeMap.Lang2)
+    ]);
+    // every press is followed by an all-zero release: no modifier is held between strokes
+    expect(h.sink.reports.filter((report) => report[2] === 0).every((r) => r[0] === 0)).toBe(true);
+    expect(h.bridgeConfirms).toEqual([]);
+    expect(h.notices).toEqual([]);
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', done: 10, skipped: [] });
+  });
+
+  it('IME code input at Fast is typed exactly as at Normal: every key held 20 ms, 40 ms apart', async () => {
+    const h = makeHarness({
+      clipboard: 'あいう',
+      targetOs: 'windows',
+      settings: { speed: 'fast', unicodeMethod: 'ime-code' }
+    });
+    await expect(h.controller.startFromRow()).resolves.toBe('started');
+    // 21 strokes of 20 + 20 ms, the settle after the first LANG2 and 100 ms after the first F5:
+    // the estimate of Normal
+    expect(h.run()).toMatchObject({
+      status: 'running',
+      method: 'unicode',
+      total: 21,
+      etaMs: 21 * 40 + 150 + 100
+    });
+
+    // when each report goes out, in ms since the start of the run
+    const stamps: number[] = [];
+    const note = () => {
+      while (stamps.length < h.sink.reports.length) stamps.push(h.clock.now());
+    };
+    note();
+    for (let i = 0; i < 2000 && h.engine.state !== 'idle'; i++) {
+      await h.clock.advanceAsync(1);
+      note();
+    }
+    expect(presses(h)).toEqual([
+      press(KeycodeMap.Lang2),
+      press(KeycodeMap.Lang1),
+      ...imeUnit('3042'),
+      ...imeUnit('3044'),
+      ...imeUnit('3046'),
+      press(KeycodeMap.Lang2)
+    ]);
+    const down = h.sink.reports.flatMap((report, i) => (report[2] !== 0 ? [i] : []));
+    const times = down.map((i) => stamps[i]);
+    const holds = down.map((i) => stamps[i + 1] - stamps[i]);
+    // with every stroke 20 ms apart the second unit had F5 at 490, its commit at 510 and the next
+    // digit at 530: on the target that digit was lost after a focus change (あい０４６ arrived).
+    // Keys 40 ms apart but held only 10 ms still lost one on a slow destination: so Fast sends
+    // the timeline of Normal
+    expect(times).toEqual([
+      ...[0, 190],
+      ...[230, 270, 310, 350, 390, 530],
+      ...[570, 610, 650, 690, 730, 770],
+      ...[810, 850, 890, 930, 970, 1010],
+      1050
+    ]);
+    // every key is held for 20 ms, not for the 10 ms of Fast
+    expect(new Set(holds)).toEqual(new Set([20]));
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', done: 21 });
+  });
+
+  it('IME code input: a cancel inside a character still sends its F5 and commit, then stops before LANG2', async () => {
+    for (const interrupt of ['cancel', 'keydown'] as const) {
+      const h = makeHarness({
+        clipboard: 'あい',
+        targetOs: 'windows',
+        settings: { unicodeMethod: 'ime-code' }
+      });
+      await h.controller.startFromRow();
+      // until the first digit of あ is down: its unit (digits, F5, commit) is open
+      await untilPressed(h, KeycodeMap.Digit3, 1);
+      if (interrupt === 'cancel') h.controller.cancel();
+      else keydown(h.target, 'KeyQ');
+      expect(h.engine.state, interrupt).toBe('running');
+      await settle(h);
+
+      expect(presses(h), interrupt).toEqual([
+        press(KeycodeMap.Lang2),
+        press(KeycodeMap.Lang1),
+        ...imeUnit('3042')
+      ]);
+      // あ is committed, い is not started, and the closing LANG2 is not sent: the target IME stays on
+      expect(h.run(), interrupt).toMatchObject({
+        status: 'done',
+        reason: interrupt === 'cancel' ? 'cancelled' : 'key-interrupt',
+        done: 8,
+        total: 15
+      });
+    }
+  });
+
+  it('IME code input: a cancel during the last character finishes the run: closing LANG2 sent, completed', async () => {
+    // nothing but the IME-off key is left after that character: the whole text is on the target
+    for (const interrupt of ['cancel', 'keydown'] as const) {
+      const h = makeHarness({
+        clipboard: 'あい',
+        targetOs: 'windows',
+        settings: { unicodeMethod: 'ime-code' }
+      });
+      await h.controller.startFromRow();
+      // until the first digit of い, the last character, is down
+      await untilPressed(h, KeycodeMap.Digit3, 2);
+      if (interrupt === 'cancel') h.controller.cancel();
+      else keydown(h.target, 'KeyQ');
+      expect(h.engine.state, interrupt).toBe('running');
+      await settle(h);
+
+      expect(presses(h), interrupt).toEqual([
+        press(KeycodeMap.Lang2),
+        press(KeycodeMap.Lang1),
+        ...imeUnit('3042'),
+        ...imeUnit('3044'),
+        // the target IME is off again
+        press(KeycodeMap.Lang2)
+      ]);
+      expect(h.sink.reports[h.sink.reports.length - 1], interrupt).toEqual(ZERO);
+      // completed, but marked: the dictation bar must not send its next chunk after this run
+      expect(h.run(), interrupt).toMatchObject({
+        status: 'done',
+        reason: 'completed',
+        done: 15,
+        total: 15,
+        stopRequested: true
+      });
+      expect(queueMayContinue(h.run()), interrupt).toBe(false);
+      expect(h.lock.isLocked(), interrupt).toBe(false);
+    }
+  });
+
+  it('IME code input: a cancel inside a plane-3 character waits for both of its surrogate units', async () => {
+    // U+30EDE is entered as d883 and dede, each with its own F5 and commit: a stop between the
+    // two would leave a lone high surrogate in the field
+    for (const interrupt of ['cancel', 'keydown'] as const) {
+      const h = makeHarness({
+        clipboard: 'a\u{30ede}b',
+        targetOs: 'windows',
+        settings: { unicodeMethod: 'ime-code' }
+      });
+      await h.controller.startFromRow();
+      // until the first digit of the first unit (d) is down
+      await untilPressed(h, KeycodeMap.KeyD, 1);
+      if (interrupt === 'cancel') h.controller.cancel();
+      else keydown(h.target, 'KeyQ');
+      expect(h.engine.state, interrupt).toBe('running');
+      await settle(h);
+
+      expect(presses(h), interrupt).toEqual([
+        press(KeycodeMap.Lang2),
+        press(KeycodeMap.KeyA),
+        press(KeycodeMap.Lang1),
+        ...imeUnit('d883'),
+        ...imeUnit('dede')
+      ]);
+      expect(h.run(), interrupt).toMatchObject({
+        status: 'done',
+        reason: interrupt === 'cancel' ? 'cancelled' : 'key-interrupt',
+        done: 15,
+        total: 17
+      });
+    }
+  });
+
+  it('IME code input: a click or a hidden tab inside a character stops at once, in the middle of its unit', async () => {
+    const stops = [
+      ['pointerdown', 'mouse-interrupt'],
+      ['pagehide', 'tab-hidden']
+    ] as const;
+    for (const [type, reason] of stops) {
+      const h = makeHarness({
+        clipboard: 'あい',
+        targetOs: 'windows',
+        settings: { unicodeMethod: 'ime-code' }
+      });
+      await h.controller.startFromRow();
+      await untilPressed(h, KeycodeMap.Digit3, 1);
+      h.target.dispatchEvent(new Event(type));
+      await settle(h);
+
+      // a click reaches the target, so nothing may follow it: not the rest of the unit (its F5
+      // would arrive wherever the click put the focus) and not the closing LANG2
+      expect(presses(h), type).toEqual([
+        press(KeycodeMap.Lang2),
+        press(KeycodeMap.Lang1),
+        press(KeycodeMap.Digit3)
+      ]);
+      expect(h.sink.reports[h.sink.reports.length - 1], type).toEqual(ZERO);
+      expect(h.run(), type).toMatchObject({ status: 'done', reason, done: 2, total: 15 });
+    }
+  });
+
+  it('IME code input never presses the Tab key in a text that goes by code input', async () => {
+    const h = makeHarness({
+      clipboard: '列1\t列2',
+      targetOs: 'windows',
+      settings: { unicodeMethod: 'ime-code' }
+    });
+    await h.controller.startFromRow();
+    await settle(h);
+    expect(presses(h)).toEqual([
+      press(KeycodeMap.Lang2),
+      press(KeycodeMap.Lang1),
+      ...imeUnit('5217'),
+      press(KeycodeMap.Lang2),
+      press(KeycodeMap.Digit1),
+      press(KeycodeMap.Lang1),
+      // the tab character by its code: the focus stays in the field for the F5 that follows
+      ...imeUnit('0009'),
+      ...imeUnit('5217'),
+      press(KeycodeMap.Lang2),
+      press(KeycodeMap.Digit2)
+    ]);
+    expect(h.sink.reports.some((report) => report[2] === KeycodeMap.Tab)).toBe(false);
+    expect(h.run()).toMatchObject({ status: 'done', reason: 'completed', method: 'unicode' });
+  });
+
+  it('IME code input: an ASCII-only text starts with LANG2 as well, whatever the IME pre-key setting', async () => {
+    const typed = async (unicodeMethod: string, imePreKey: string) => {
+      const h = makeHarness({
+        clipboard: 'a\tb',
+        targetOs: 'windows',
+        settings: { version: 2, unicodeMethod, imePreKey }
+      });
+      await expect(h.controller.startFromRow()).resolves.toBe('started');
+      expect(h.run().method, unicodeMethod).toBe('direct');
+      await settle(h);
+      expect(h.run().reason, unicodeMethod).toBe('completed');
+      return presses(h);
+    };
+    const text = [press(KeycodeMap.KeyA), press(KeycodeMap.Tab), press(KeycodeMap.KeyB)];
+    // "Don't send": the method that can leave the IME on turns it off anyway
+    expect(await typed('ime-code', 'none')).toEqual([press(KeycodeMap.Lang2), ...text]);
+    expect(await typed('ime-code', 'NonConvert')).toEqual([press(KeycodeMap.Lang2), ...text]);
+    expect(await typed('ime-code', 'auto')).toEqual([press(KeycodeMap.Lang2), ...text]);
+    // the other methods do what the setting says
+    for (const unicodeMethod of ['auto', 'bridge', 'ctrl-shift-u', 'alt-hex', 'skip']) {
+      expect(await typed(unicodeMethod, 'none'), unicodeMethod).toEqual(text);
+      expect(await typed(unicodeMethod, 'NonConvert'), unicodeMethod).toEqual([
+        press(KeycodeMap.NonConvert),
+        ...text
+      ]);
+    }
+  });
+
   it('resolves the method from the setting and the target OS', async () => {
     const start = async (options: HarnessOptions) => {
       const h = makeHarness({ clipboard: 'aあ', ...options });
@@ -718,6 +1015,18 @@ describe('PasteController: methods, bridge and Caps Lock (spec v2)', () => {
       method: 'direct',
       skipped: skippedA
     });
+    // the Windows methods that open no window are explicit choices as well
+    for (const unicodeMethod of ['ime-code', 'alt-hex']) {
+      expect(await explicit('windows', unicodeMethod)).toEqual({
+        method: 'unicode',
+        skipped: [],
+        first: press(KeycodeMap.Lang2)
+      });
+      expect(await explicit('macos', unicodeMethod)).toMatchObject({
+        method: 'direct',
+        skipped: skippedA
+      });
+    }
   });
 
   it('without video the bridge is refused: a notice, no dialog, nothing sent', async () => {

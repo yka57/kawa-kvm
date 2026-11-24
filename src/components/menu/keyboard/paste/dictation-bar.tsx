@@ -12,6 +12,7 @@ import { dictationBarAtom, pasteRunAtom } from '@/jotai/paste.ts';
 import * as storage from '@/libs/storage';
 
 import { pasteController } from './controller.ts';
+import { queueMayContinue } from './decide.ts';
 import { DictationQueue } from './dictation-queue.ts';
 
 /** Dictation keeps revising its last words: send only after this long without a change. */
@@ -87,10 +88,11 @@ export const DictationBar = () => {
     pump();
   }, [pump, write]);
 
-  // the next chunk leaves when the run before it completed; any other stop keeps the rest
+  // the next chunk leaves when the run before it completed and nobody tried to stop it; any
+  // stop keeps the rest
   useEffect(() => {
     if (run.status !== 'done') return;
-    if (run.reason === undefined || run.reason === 'completed') {
+    if (queueMayContinue(run)) {
       pump();
     } else {
       restore('');

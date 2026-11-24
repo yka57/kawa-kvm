@@ -18,7 +18,7 @@ import { hidLock, type HidLock } from '@/libs/keyboard/hid-lock';
 import { createVideoSampler, type FrameSampler } from '@/libs/media/frame-probe';
 import { buildBridgeProgram, buildBridgeUrl } from '@/libs/paste/bridge';
 import { buildCapsLockPreflight } from '@/libs/paste/caps-lock';
-import { planPaste } from '@/libs/paste/plan';
+import { planPacing, planPaste } from '@/libs/paste/plan';
 import {
   normalisePasteSettings,
   resolveImePreKey,
@@ -28,7 +28,6 @@ import { PASTE_HARD_LIMIT } from '@/libs/paste/text-to-keys';
 import type { SkippedChar, TargetLayout } from '@/libs/paste/types';
 import {
   estimateProgramMs,
-  PACING,
   TypingEngine,
   type EngineEvent,
   type Pacing,
@@ -46,12 +45,13 @@ import {
 
 /**
  * Paste controller (spec v1 §5.4, v2 §9): one path for the menu row, the
- * ⌘⇧V hotkey and the manual text box. Plans the text (v1 keystrokes,
- * Ctrl+Shift+U or the browser bridge), asks what has to be asked and runs
- * the result as one typing-engine program. Reads the jotai store directly so
- * the hotkey (which arrives from the keyboard driver, outside React) shares
- * it. No React or antd here: toasts and dialogs go through a UI bridge
- * registered by the progress pill.
+ * ⌘⇧V hotkey and the manual text box. Plans the text (v1 keystrokes, code
+ * point entry by Ctrl+Shift+U, Alt+numpad or IME code input, or the browser
+ * bridge), asks what has to be asked and runs the result as one
+ * typing-engine program. Reads the jotai store directly so the hotkey (which
+ * arrives from the keyboard driver, outside React) shares it. No React or
+ * antd here: toasts and dialogs go through a UI bridge registered by the
+ * progress pill.
  */
 
 export type Store = ReturnType<typeof createStore>;
@@ -256,7 +256,8 @@ export class PasteController {
         maxChars: PASTE_HARD_LIMIT
       });
       const { stats, skipped } = plan.kind === 'bridge' ? plan : plan.compiled;
-      const pacing = PACING[settings.speed];
+      // IME code input is typed no faster than Normal: Fast lost digits on the target
+      const pacing = planPacing(plan, settings.speed);
 
       // the clipboard read was asynchronous: serial may have dropped meanwhile
       const decision = decideStart({ stats }, store.get(serialStateAtom));
@@ -383,7 +384,7 @@ export class PasteController {
       this.explicitCancel && (reason === 'key-interrupt' || reason === 'mouse-interrupt')
         ? 'cancelled'
         : reason;
-    store.set(pasteRunAtom, {
+    const state: PasteRunState = {
       status: 'done',
       done: event.done,
       total: event.total,
@@ -391,7 +392,10 @@ export class PasteController {
       reason: shown,
       skipped: this.skipped,
       method: this.method
-    });
+    };
+    // a Cancel or a host key during the last character: the run finished, the queue must not go on
+    if (event.stopDropped !== undefined) state.stopRequested = true;
+    store.set(pasteRunAtom, state);
     if (reason !== 'completed') this.resyncDriver();
   }
 

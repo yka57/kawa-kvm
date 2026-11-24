@@ -143,6 +143,7 @@ const en = {
       unicodeMethod: 'Japanese and other non-ASCII',
       unicodeAuto: 'Auto (Windows: via browser / Linux: Ctrl+Shift+U)',
       unicodeBridge: 'Via the target browser',
+      unicodeImeCode: 'IME code input (Windows, no window)',
       unicodeCtrlShiftU: 'Ctrl+Shift+U (Linux)',
       dictationBar: 'Dictation bar',
       dictationPlaceholder:
@@ -153,10 +154,12 @@ const en = {
       dictationQueued: '{{n}} queued',
       unicodeAltHex: 'Alt + numpad (Windows, no window, needs setup)',
       altHexHint:
-        'One-time setup on the Windows target: create the string value EnableHexNumpad = 1 under HKEY_CURRENT_USER\\Control Panel\\Input Method, then sign in again. Without it, Alt + letters act as menu shortcuts.',
+        'One-time setup on the Windows target: create the string value EnableHexNumpad = 1 under HKEY_CURRENT_USER\\Control Panel\\Input Method, then sign in again. Without it, Alt + letters act as menu shortcuts. The target NumLock must be on: with NumLock off, nothing is typed under the default Microsoft IME.',
       unicodeSkip: 'Skip (ASCII only)',
       bridgeHint:
         'Opens a temporary window in the target browser, types the text as a URL, copies it and pastes it into the original field. The target clipboard is overwritten.',
+      imeCodeHint:
+        "Types every character without a key through the code input of the Japanese Microsoft IME on the target (IME on, code point in hex, F5, Ctrl+M). Nothing has to be changed on the target and the text goes into the focused field. About 0.25 s per character: Fast is typed at the pace of Normal. The IME must use romaji input (the default): with kana input every character comes out wrong. Do not use it where the IME is unavailable: the digits and F5 would reach the application as plain keys. Every character is added to the target IME's input history (prediction suggestions). If a character arrives as full-width digits or letters, the target is not keeping up: set the speed to Safe. Measured on Windows 11 in a virtual machine only (Edge and Notepad), so try it in Notepad first.",
       unicodeHint:
         'Types each character with Ctrl+Shift+U (IBus, fcitx5, GTK, Chromium). Switch Mozc to direct input.',
       bridgeWindow: 'Window opened by the bridge',

@@ -250,7 +250,7 @@ describe('v1 → v2 migration', () => {
       hotkey: { code: 'KeyB', ctrl: true }
     };
     expect(normalisePasteSettings(stored, 'Windows')).toEqual(stored);
-    for (const unicodeMethod of ['auto', 'bridge', 'ctrl-shift-u', 'alt-hex', 'skip']) {
+    for (const unicodeMethod of ['auto', 'bridge', 'ime-code', 'ctrl-shift-u', 'alt-hex', 'skip']) {
       expect(normalisePasteSettings({ unicodeMethod }, 'Windows').unicodeMethod).toBe(
         unicodeMethod
       );
@@ -287,8 +287,20 @@ describe('resolveImePreKey / resolveUnicodeMethod', () => {
     expect(resolveUnicodeMethod('auto', 'macos')).toBe('skip');
   });
 
+  it("'auto' never resolves to 'ime-code' or 'alt-hex': both need something on the target", () => {
+    for (const os of OSES) {
+      expect(['bridge', 'ctrl-shift-u', 'skip'], os).toContain(resolveUnicodeMethod('auto', os));
+    }
+  });
+
   it('macOS targets always skip (both methods use Ctrl chords); elsewhere explicit wins', () => {
-    const methods: UnicodeMethodSetting[] = ['bridge', 'ctrl-shift-u', 'alt-hex', 'skip'];
+    const methods: UnicodeMethodSetting[] = [
+      'bridge',
+      'ime-code',
+      'ctrl-shift-u',
+      'alt-hex',
+      'skip'
+    ];
     for (const method of methods) {
       expect(resolveUnicodeMethod(method, 'macos')).toBe('skip');
       expect(resolveUnicodeMethod(method, 'windows')).toBe(method);

@@ -11,12 +11,12 @@ This fork's hosted build: [yka57.github.io/kawa-kvm](https://yka57.github.io/kaw
 A personal fork of the browser app for a **Mac host** (MacBook trackpad, Japanese, Chrome)
 operating a Windows machine through a NanoKVM-USB. It adds three things on top of upstream:
 
-| Feature                                                                                                                                                                                                                                                                              | Where                                                    | Default                                                                           |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| **⌘ key mapping** — ⌘ + C/V/A/F/X/Z (configurable) is sent as Ctrl, ⌘ + any other key as Win (⌘⇧S = Win+Shift+S), ⌘ alone = Win; split off = every ⌘ is Ctrl; plus Mac navigation rules (⌘←/→ → Home/End, ⌥←/→ → Ctrl+←/→, ⌘⇧[ ] → Ctrl+Shift+Tab / Ctrl+Tab)                        | Keyboard menu → _⌘ key mapping (Mac)_ (macOS hosts only) | **On** while the host is macOS and the Target OS is not macOS                     |
-| **Trackpad / scroll fidelity** — proportional two-finger scrolling with a _Scroll sensitivity_ slider, pointer capture in absolute mode (no stuck buttons), a _Pointer speed_ gain in relative mode, in-flight coalescing of mouse moves                                             | Mouse menu → _Wheel speed_ / _Pointer speed_             | 100 px per notch, gain ×1.00                                                      |
-| **Host clipboard → keystrokes** — one click (or ⌘⇧V) types the Mac clipboard on the target with the US or JIS key table, progress pill, cancel on any host key or click; Japanese and other non-ASCII text goes through the target browser (Windows) or Ctrl+Shift+U (Linux)         | Keyboard menu → _Paste host clipboard_ (gear = settings) | Normal speed (20 ms / 20 ms), Enter, non-ASCII _Auto_, ⌘⇧V enabled on macOS hosts |
-| **Dictation bar** — a host-side text field (macOS dictation or the host IME writes into it) whose text is typed on the target on Enter or after a pause; with the _Alt + numpad_ method (Windows target, `EnableHexNumpad` registry value) Japanese arrives without opening a window | Keyboard menu → _Dictation bar_                          | Off; auto-send on                                                                 |
+| Feature                                                                                                                                                                                                                                                                                         | Where                                                    | Default                                                                           |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **⌘ key mapping** — ⌘ + C/V/A/F/X/Z (configurable) is sent as Ctrl, ⌘ + any other key as Win (⌘⇧S = Win+Shift+S), ⌘ alone = Win; split off = every ⌘ is Ctrl; plus Mac navigation rules (⌘←/→ → Home/End, ⌥←/→ → Ctrl+←/→, ⌘⇧[ ] → Ctrl+Shift+Tab / Ctrl+Tab)                                   | Keyboard menu → _⌘ key mapping (Mac)_ (macOS hosts only) | **On** while the host is macOS and the Target OS is not macOS                     |
+| **Trackpad / scroll fidelity** — proportional two-finger scrolling with a _Scroll sensitivity_ slider, pointer capture in absolute mode (no stuck buttons), a _Pointer speed_ gain in relative mode, in-flight coalescing of mouse moves                                                        | Mouse menu → _Wheel speed_ / _Pointer speed_             | 100 px per notch, gain ×1.00                                                      |
+| **Host clipboard → keystrokes** — one click (or ⌘⇧V) types the Mac clipboard on the target with the US or JIS key table, progress pill, cancel on any host key or click; Japanese and other non-ASCII text goes through the target browser (Windows) or Ctrl+Shift+U (Linux)                    | Keyboard menu → _Paste host clipboard_ (gear = settings) | Normal speed (20 ms / 20 ms), Enter, non-ASCII _Auto_, ⌘⇧V enabled on macOS hosts |
+| **Dictation bar** — a host-side text field (macOS dictation or the host IME writes into it) whose text is typed on the target on Enter or after a pause; with the _IME code input_ method (Windows target, Japanese Microsoft IME, nothing to set up) Japanese arrives without opening a window | Keyboard menu → _Dictation bar_                          | Off; auto-send on                                                                 |
 
 Plus the shared _Target OS_ / _Target keyboard layout_ rows, a complete Japanese UI (auto-selected
 for Japanese browsers), a _Release all keys_ row and the HID log overlay described below.
@@ -47,6 +47,12 @@ keeps the v1 behaviour: only those characters are skipped and listed. _Auto_ pic
 | Windows   | Via the target browser | The whole text, ASCII included, goes through a temporary private window in the target browser and is pasted with Ctrl+V |
 | Linux     | Ctrl+Shift+U           | Characters with a key are typed directly, every other code point as Ctrl+Shift+U, lowercase hex digits, Space           |
 | macOS     | Skip (ASCII only)      | Non-typeable characters are skipped and listed: both methods drive the target with Ctrl chords                          |
+
+Two more methods exist for Windows targets. They are chosen explicitly, never by _Auto_, and type
+into whatever field has the focus without opening a window: _IME code input_ (recommended, nothing
+to set up on the target; see _IME code input_ below) and _Alt + numpad_ (hex entry: needs the
+`EnableHexNumpad` registry value, a new sign-in and NumLock on). Both type characters that have a
+key directly and every other code point by its code.
 
 The bridge, step by step (the pill shows each phase and _Don't touch anything until it finishes_;
 none of the text is typed before the check page has worked):
@@ -96,9 +102,95 @@ none of the text is typed before the check page has worked):
   hiding the tab stops at once. Press Escape on the target if a half-entered code is left.
 - New _Fast_ speed (10 ms hold / 10 ms gap / 60 ms after Enter). The settings are stored as
   version 2; a version 1 `imePreKey: 'none'` becomes `'auto'`.
-- Not done: Windows Alt+numpad codes (the new Microsoft IME cuts values above 255 to their low byte,
-  RichEdit reads them as Unicode, NumLock off turns the keypad digits into Alt+arrows), splitting
+- _Alt + numpad_ (Windows, hex entry): Alt stays down over keypad + and the UTF-16 code unit in
+  hex. It needs the string value `EnableHexNumpad` = `1` under
+  `HKEY_CURRENT_USER\Control Panel\Input Method`, a new sign-in, and **NumLock on**: measured under
+  the default (new) Microsoft IME, nothing at all is typed while NumLock is off.
+- Not done: decimal Alt codes on Windows (measured: the default Microsoft IME keeps only the low
+  byte of the value, so Alt+33440 types `á` instead of `あ`; from desk research, not measured,
+  because the lab ran no RichEdit application: RichEdit reads the value as Unicode), splitting
   long bridge texts, macOS targets, restoring the IME or Caps Lock state.
+
+### IME code input (Windows targets, no window)
+
+_Japanese and other non-ASCII_ → _IME code input (Windows, no window)_ types through the code input
+of the Japanese Microsoft IME. The text goes into whatever field has the focus, no window opens,
+the target clipboard is not touched and nothing has to be changed on the target: the recommended
+way to type Japanese without a window, for the dictation bar for instance. _Auto_ never picks it,
+because it needs the Japanese Microsoft IME as the target's active input method.
+
+- **Sequence:** LANG2 (IME off) first, whatever _Turn the target IME off before typing_ says,
+  also for a text the layout can type completely, which is typed key by key as before (this is
+  the one method that can leave the IME on). ASCII and line breaks are typed with the IME off
+  through the layout table. A stretch of other characters starts with LANG1 (IME on, hiragana
+  mode, from every starting mode). Each code point is its code in lower-case hex on the main-row
+  digits and the letter keys a–f (exactly four digits up to U+FFFF, exactly six above, never
+  five: `3042`, `00e9`, `01f600`), F5 to convert and Ctrl+M to commit, as one unit that a cancel
+  does not split. LANG2 ends the stretch. `aあ😀b` is LANG2, a, LANG1, 3 0 4 2 F5 Ctrl+M,
+  0 1 f 6 0 0 F5 Ctrl+M, LANG2, b. U+30000–U+3FFFF does not convert and is entered as its two
+  UTF-16 surrogates, each with its own F5 and Ctrl+M; a cancel does not split the two either.
+- **Tab:** a Tab inside a text that goes by IME code input is entered as a tab character (code
+  `0009`, like any other character), not pressed as a key. The Tab key would move the focus out
+  of the field, and the F5 of the next character would then reach the application with nothing
+  to convert. Measured in both Edge fields, CKEditor 5 and Notepad: the tab character is inserted
+  and the focus stays. A text the layout can type completely still presses the Tab key, as with
+  every other method: in a web field the focus moves on and the rest of the text is typed there.
+- **Commit key:** Ctrl+M, because Enter would be a line break (send, in a chat box) after every
+  code if the IME were off after all. Sent with nothing to convert, Ctrl+M did not change the
+  field, the focus or the IME state in Edge; whether Edge's own Ctrl+M shortcut (mute tab) fires
+  was not checked. During a conversion the page gets the chord only as key events with keyCode
+  229: in more than 500 measured runs no Edge field and no CKEditor 5 editor saw a Ctrl+M
+  keydown, an Enter that would send, or a plain F5. Microsoft Teams has Ctrl+M as a shortcut (move
+  focus to the message pane). Its web client code, read in November 2026, looks shortcuts up by
+  keyCode on keydown, so with the default shortcuts it reacts neither to the chord nor to an
+  Enter during a conversion; a shortcut the user re-assigned is matched differently and would
+  fire. That is a reading of the code, not a measurement of Teams. If the IME is off after all,
+  each Ctrl+M moves the focus out of the Teams message box (nothing is sent).
+- **Measured** in a virtual machine on Japanese Windows 11 (26H2, build 26300), default (new)
+  Microsoft IME, romaji input. With a test sender, in an Edge textarea and an Edge contenteditable
+  field: about 26,000 characters, none wrong at 20 ms / 20 ms and at 10 ms / 10 ms; one failure
+  class appeared at 5 ms / 5 ms and faster only (a digit swallowed after a line break in a
+  contenteditable field). With the keys this app sends, in those two fields and in CKEditor 5
+  (39.0.0, 47.6.2, 49.1.0; the editor Teams builds its message box on): at 20 ms / 20 ms no
+  character was wrong (15 chat messages and 15 other texts in each of the five fields; 58 of 58
+  first pastes after a focus change). With every key at 10 ms / 10 ms, the first paste after the
+  field got the focus (a page load, a click into it) lost a digit in about 1 run in 10 (20 of 200;
+  the two Edge fields: 0 of 75), because the IME's second conversion after a focus change takes
+  23–30 ms instead of about 5. With F5 and Ctrl+M at 40 ms that was gone (196 of 196), but a page
+  that needed 30 ms for every input event still fell behind digits 20 ms apart and lost one in
+  10 of 84 runs; and with every key 40 ms apart but held for only 10 ms, 2 of 20 first pastes
+  after a load of that slow page lost one. At 20 ms / 20 ms that slow page lost nothing (104 of
+  104 runs, 20 of them first pastes after a load).
+- **Pace:** six strokes per character at 20 ms / 20 ms: about 0.24 s per character (300 Japanese
+  characters: about 72 s). A text that needs IME code input is typed at the pace of Normal even
+  when the speed is Fast: the whole text, its ASCII and line breaks included, exactly as at Normal
+  (see _Measured_). Safe takes about 0.6 s per character. The pace sets how slow a destination may
+  be: a page that needed 45 ms or more for every input event lost digits at 20 ms / 20 ms too
+  (5 of 46 runs), and none at Safe (30 of 30). A character that arrives as full-width digits and
+  letters (`資５９９は` for `資料は`) means the destination is not keeping up: switch to Safe. The
+  app also waits an extra 100 ms after the first F5 of every stretch as a margin.
+- **Limits:** with the target IME set to kana input (not the default) the code keys type kana and
+  every character comes out wrong, silently. Where the IME does not come on (no Japanese IME
+  active, an IME-disabled field) the digits arrive as plain text and F5 / Ctrl+M reach the
+  application; in Edge such an F5 reloaded the page. Every commit goes into the target IME's input
+  history (prediction suggestions).
+- **After a stop:** a run that stops in the middle of a text can leave the target IME on. A cancel
+  (pill, row, hotkey) or a host key lets the character being entered finish first; when that was
+  the last character, only the IME-off key is left, so the run sends it and ends as _Done_. The
+  dictation bar then keeps the chunks still queued instead of sending them: it was a stop. A
+  click, a hidden tab or a serial error stops at once, in the middle of a character: before trying
+  again, press Escape two or three times on the target, even when nothing seems to be left over.
+  The digits typed so far stay inside the IME as an unfinished conversion and can come back with
+  the next key. Measured without the Escape: they remain in the field, and the first character of
+  the next Japanese stretch arrives as its code keys (`お疲３０４え８６解しました` for `お疲了解しました`); with one
+  Escape first, the texts typed next arrived exactly.
+- **Not measured:** the Microsoft Teams desktop app, Windows 10, a real USB keyboard path (the
+  NanoKVM-USB itself). `docs/TESTING.ja.md` has the rows to check them (6-22 to 6-28).
+- First trial: Notepad on the target, then the real destination. In Notepad ordinary text and
+  single emoji arrived exactly; an F5 with nothing to convert inserts the time and date there (a
+  visible sign that the IME did not come on); emoji made of several code points (flags, families,
+  skin tones) are broken by Notepad itself. For chat apps where Enter sends (Teams), set _Newline_
+  to Shift+Enter.
 
 ## Run it on the Mac
 
@@ -148,10 +240,11 @@ upstream traces while the remap is off), the wheel accumulator (regression again
 expression), relative motion and absolute mapping, the move queue, the paste compiler (US table
 parity with upstream's `charCodes.ts`, kept verbatim as `src/test/legacy-char-codes.ts`), the paste
 planner, the browser bridge (the generated page script against `bridgeHash`, whole runs against a
-scripted screen), Ctrl+Shift+U entry, the frame probe, the CH9329 frame parser, the serial read
-loop and the lock-state query, the typing engine, the settings normalisers (including the v1 → v2
-migration), the locale key parity between `en` and `ja`, and the HID log. The hardware checklist in
-`docs/TESTING.ja.md` covers what cannot be tested without the device.
+scripted screen), Ctrl+Shift+U, Alt+numpad and IME code-input entry, the frame probe, the CH9329
+frame parser, the serial read loop and the lock-state query, the typing engine, the settings
+normalisers (including the v1 → v2 migration), the locale key parity between `en` and `ja`, and the
+HID log. The hardware checklist in `docs/TESTING.ja.md` covers what cannot be tested without the
+device.
 
 ## Debugging: the HID log overlay
 

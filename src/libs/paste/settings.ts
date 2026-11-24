@@ -15,9 +15,10 @@ export interface PasteHotkey {
 /** IME pre-key as stored; 'auto' is resolved per target OS by resolveImePreKey. */
 export type ImePreKeySetting = ImePreKey | 'auto';
 /** How text without a key in the target layout is entered, as stored (spec §1.2). */
-export type UnicodeMethodSetting = 'auto' | 'bridge' | 'ctrl-shift-u' | 'alt-hex' | 'skip';
+export type UnicodeMethodSetting =
+  'auto' | 'bridge' | 'ime-code' | 'ctrl-shift-u' | 'alt-hex' | 'skip';
 /** The resolved Unicode method a paste uses. */
-export type UnicodeMethod = 'bridge' | 'ctrl-shift-u' | 'alt-hex' | 'skip';
+export type UnicodeMethod = 'bridge' | 'ime-code' | 'ctrl-shift-u' | 'alt-hex' | 'skip';
 /** Window the bridge opens in the target browser (spec §4.2). */
 export type BridgeWindow = 'chromium-private' | 'firefox-private' | 'new-window';
 
@@ -26,7 +27,7 @@ export interface PasteSettings {
   version: 2;
   speed: SpeedPreset;
   newline: NewlineMode;
-  /** Direct path only: the bridge and Ctrl+Shift+U paths are byte-exact. */
+  /** Direct path only: the bridge and the code point entry paths are byte-exact. */
   normalizePunct: boolean;
   stripTrailingNewline: boolean;
   imePreKey: ImePreKeySetting;
@@ -51,6 +52,7 @@ const IME_PRE_KEYS: readonly ImePreKeySetting[] = ['auto', 'none', 'NonConvert',
 const UNICODE_METHODS: readonly UnicodeMethodSetting[] = [
   'auto',
   'bridge',
+  'ime-code',
   'ctrl-shift-u',
   'alt-hex',
   'skip'
@@ -86,8 +88,10 @@ export function resolveImePreKey(setting: ImePreKeySetting, targetOs: TargetOs):
 
 /**
  * 'auto' picks the bridge on Windows and Ctrl+Shift+U on Linux ('alt-hex' is
- * never automatic: it needs a registry value on the target). macOS
- * targets always skip: both methods drive the target with Ctrl chords.
+ * never automatic: it needs a registry value on the target; 'ime-code' is
+ * never automatic either: it needs the Japanese Microsoft IME as the target's
+ * active input method). macOS targets always skip: both methods drive the
+ * target with Ctrl chords.
  */
 export function resolveUnicodeMethod(
   method: UnicodeMethodSetting,

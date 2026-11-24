@@ -98,6 +98,13 @@ export interface EngineEvent {
   total: number;
   etaMs: number;
   reason?: StopReason;
+  /**
+   * On a 'stop' with reason 'completed' only: a stop that was asked for while
+   * the last character was being entered and dropped, because the whole text
+   * was on the target by then. Whoever queues more text behind this run must
+   * not send it.
+   */
+  stopDropped?: StopReason;
   /** The latest `phase` step, once the program has passed one. */
   phase?: PastePhase;
 }
@@ -108,6 +115,8 @@ export interface EngineResult {
   reason: StopReason;
   typedStrokes: number;
   totalStrokes: number;
+  /** With reason 'completed' only: see EngineEvent.stopDropped. */
+  stopDropped?: StopReason;
 }
 
 export const ZERO_REPORT: readonly number[] = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -135,9 +144,15 @@ export class WriteTimeoutError extends Error {
   }
 }
 
-/** Pause after a stroke's release: the gap, Enter's extra pause and the stroke's own settle time. */
+/**
+ * Pause after a stroke's release: the gap, Enter's extra pause and the
+ * stroke's own settle time; longer when the stroke would otherwise take less
+ * than its `minMs` from its press to the next one.
+ */
 function gapAfterMs(stroke: KeyStroke, pacing: Pacing): number {
-  return pacing.gapMs + (stroke.tag === 'enter' ? pacing.afterEnterMs : 0) + (stroke.afterMs ?? 0);
+  const gap =
+    pacing.gapMs + (stroke.tag === 'enter' ? pacing.afterEnterMs : 0) + (stroke.afterMs ?? 0);
+  return Math.max(gap, (stroke.minMs ?? 0) - pacing.holdMs);
 }
 
 function strokeDurationMs(stroke: KeyStroke, pacing: Pacing): number {
@@ -164,6 +179,24 @@ export function estimateProgramMs(steps: readonly ProgramStep[], pacing: Pacing)
 
 function countStrokes(steps: readonly ProgramStep[]): number {
   return steps.reduce((sum, step) => (step.kind === 'keys' ? sum + step.strokes.length : sum), 0);
+}
+
+/**
+ * Strokes of the program up to and including its last one that is not tagged
+ * 'ime-pre' (0 when there is none). Once that many are typed, the whole text
+ * is on the target and only keys that switch the target IME are left.
+ */
+function countThroughLastText(steps: readonly ProgramStep[]): number {
+  let count = 0;
+  let through = 0;
+  for (const step of steps) {
+    if (step.kind !== 'keys') continue;
+    for (const stroke of step.strokes) {
+      count++;
+      if (stroke.tag !== 'ime-pre') through = count;
+    }
+  }
+  return through;
 }
 
 function pressReport(stroke: KeyStroke): number[] {
@@ -204,6 +237,10 @@ function readVisibility(event: Event): string | undefined {
 interface RunContext {
   pacing: Pacing;
   total: number;
+  /** countThroughLastText(steps): once `done` reaches it, only 'ime-pre' strokes are left. */
+  textEnd: number;
+  /** The stop closeGroup dropped because the text was complete. */
+  stopDropped?: StopReason;
   done: number;
   etaMs: number;
   phase?: PastePhase;
@@ -286,6 +323,7 @@ export class TypingEngine {
     const run: RunContext = {
       pacing,
       total,
+      textEnd: countThroughLastText(steps),
       done: 0,
       etaMs: estimateProgramMs(steps, pacing),
       lastProgressAt: clock.now(),
@@ -330,8 +368,14 @@ export class TypingEngine {
     const reason = this.stopReason ?? 'completed';
     this.stopReason = null;
     this._state = 'idle';
-    this.emit(this.event('stop', run, reason));
-    return { reason, typedStrokes: run.done, totalStrokes: total };
+    const stop = this.event('stop', run, reason);
+    const result: EngineResult = { reason, typedStrokes: run.done, totalStrokes: total };
+    if (reason === 'completed' && run.stopDropped !== undefined) {
+      stop.stopDropped = run.stopDropped;
+      result.stopDropped = run.stopDropped;
+    }
+    this.emit(stop);
+    return result;
   }
 
   /**
@@ -395,13 +439,19 @@ export class TypingEngine {
   /**
    * Leaves the atomic group; a cancel deferred inside it takes effect now,
    * unless the group ended the program's keys: the whole text is typed, so
-   * the run stays 'completed'.
+   * the run stays 'completed'. The same holds when every stroke still left
+   * is tagged 'ime-pre' (IME code input ends with the key that turns the
+   * target IME off again): the cancel is dropped, those strokes are sent and
+   * the run finishes as 'completed'. A dropped stop is reported with the run's
+   * end (`stopDropped`).
    */
   private closeGroup(run: RunContext): void {
     this.groupOpen = false;
     const deferred = this.deferredReason;
     this.deferredReason = null;
-    if (deferred !== null && run.done < run.total) this.cancel(deferred);
+    if (deferred === null) return;
+    if (run.done < run.textEnd) this.cancel(deferred);
+    else run.stopDropped = deferred;
   }
 
   private async runWait(step: WaitStep, run: RunContext): Promise<void> {
